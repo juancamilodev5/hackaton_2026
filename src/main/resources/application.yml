@@ -1,3 +1,57 @@
+# Perfil por defecto: todo lo sensible llega por variables de entorno y la
+# aplicación no arranca si falta alguna (DB_URL, DB_USER, DB_PASSWORD, JWT_SECRET).
 spring:
   application:
     name: ulibre
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    locations: classpath:db/migration
+  mvc:
+    problemdetails:
+      enabled: true
+
+app:
+  jwt:
+    # HS256: mínimo 32 bytes
+    secret: ${JWT_SECRET}
+    expiracion: 8h
+  cors:
+    origins: ${CORS_ORIGINS:http://localhost:5173,http://localhost:3000}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    # Hibernate registra cada error SQL (con sus líneas "Detail", que pueden traer datos clínicos)
+    # aunque ManejadorErrores ya lo traduce a 409/422; los no mapeados se registran allí.
+    org.hibernate.orm.jdbc.error: error
+
+---
+# Perfil de desarrollo: valores por defecto que coinciden con docker-compose.yml
+# y datos demo (db/demo). Activar con --spring.profiles.active=dev.
+spring:
+  config:
+    activate:
+      on-profile: dev
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ulibre}
+    username: ${DB_USER:ulibre}
+    password: ${DB_PASSWORD:ulibre}
+  flyway:
+    locations: classpath:db/migration,classpath:db/demo
+    # Los datos demo son V100: una migración nueva del esquema (V4, V5...) tiene número menor y,
+    # en una base que ya aplicó V100, Flyway la rechazaría sin esto.
+    out-of-order: true
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:dev-secreto-solo-para-desarrollo-local-0123456789}

@@ -1,0 +1,2791 @@
+# Prompt maestro de contexto de base de datos
+
+Este bloque está pensado para que **lo copies completo y se lo entregues a tu compañero**, o lo pegue directamente en ChatGPT/Claude/Codex para continuar trabajando sobre la DB.
+
+```text
+# CONTEXTO MAESTRO — BASE DE DATOS
+# Plataforma de Gestión y Seguridad Quirúrgica
+# Versión conceptual: 1.0
+
+Quiero que utilices el siguiente documento como CONTEXTO MAESTRO de la base de
+datos del proyecto.
+
+No rediseñes arbitrariamente el modelo ni elimines entidades sin entender
+primero las decisiones arquitectónicas explicadas aquí.
+
+Si propones cambios:
+1. explica el problema que solucionan;
+2. identifica qué tablas se afectan;
+3. identifica qué reglas de negocio cambian;
+4. determina si rompe compatibilidad con el flujo actual;
+5. distingue claramente entre "mejora recomendada" y "requisito necesario".
+
+============================================================
+1. OBJETIVO DEL SISTEMA
+============================================================
+
+Estamos desarrollando una plataforma de gestión y seguridad quirúrgica.
+
+NO es solamente un checklist digital.
+
+El sistema cubre el proceso desde que un paciente busca atención con un médico
+especialista hasta la planificación, ejecución y posterior trazabilidad de una
+cirugía.
+
+El objetivo principal es:
+
+- gestionar pacientes;
+- gestionar profesionales;
+- configurar especialidades;
+- configurar procedimientos quirúrgicos;
+- permitir que un médico solicite una cirugía;
+- permitir al médico definir dinámicamente qué roles clínicos necesita;
+- permitir que una enfermera jefe organice la cirugía;
+- consultar disponibilidad del personal;
+- asignar profesionales;
+- asignar quirófano;
+- programar fecha y hora;
+- ejecutar un tablero digital de seguridad quirúrgica;
+- ejecutar checklists;
+- validar información;
+- generar alertas;
+- registrar tiempos;
+- registrar incidentes/novedades;
+- guardar trazabilidad completa;
+- permitir posteriormente generar indicadores.
+
+============================================================
+2. FLUJO DE NEGOCIO PRINCIPAL
+============================================================
+
+El flujo conceptual es:
+
+PACIENTE
+    ↓
+Selecciona una especialidad
+    ↓
+Selecciona un médico
+    ↓
+Consulta médica
+    ↓
+MÉDICO
+    ↓
+Determina que el paciente necesita cirugía
+    ↓
+Crea SOLICITUD DE CIRUGÍA
+    ↓
+Selecciona procedimiento
+    ↓
+Indica sitio quirúrgico / información clínica
+    ↓
+Define roles requeridos
+    ↓
+Ejemplo:
+    Anestesiólogo x2
+    Instrumentador x1
+    Ayudante x3
+    Perfusionista x1
+    ↓
+ENFERMERA JEFE
+    ↓
+Recibe solicitud
+    ↓
+Consulta profesionales disponibles
+    ↓
+Asigna personas a cada necesidad
+    ↓
+Asigna quirófano
+    ↓
+Asigna fecha y hora
+    ↓
+CIRUGÍA PROGRAMADA
+    ↓
+Preparación preoperatoria
+    ↓
+DÍA DE LA CIRUGÍA
+    ↓
+Ingreso del paciente
+    ↓
+TABLERO DE SEGURIDAD QUIRÚRGICA
+    ↓
+Preanestesia
+    ↓
+Antes de incisión
+    ↓
+Procedimiento
+    ↓
+Antes de abandonar quirófano
+    ↓
+Recuperación
+    ↓
+CIRUGÍA FINALIZADA
+    ↓
+Histórico + trazabilidad + indicadores
+
+
+============================================================
+3. CONCEPTO FUNDAMENTAL: EQUIPOS EFÍMEROS
+============================================================
+
+NO existen equipos quirúrgicos permanentes.
+
+No se debe crear inicialmente una tabla:
+
+team
+teams
+medical_team
+
+como agregado permanente.
+
+El "equipo" existe únicamente como consecuencia de las asignaciones realizadas
+para UNA cirugía específica.
+
+Ejemplo:
+
+Cirugía A:
+- Dr. Carlos → Cirujano
+- Dra. Laura → Anestesióloga
+- Dr. Juan → Anestesiólogo
+- María → Instrumentadora
+- Pedro → Ayudante
+- Ana → Ayudante
+
+Cirugía B podría tener una combinación completamente diferente.
+
+La entidad que representa esto es:
+
+surgery_staff_assignments
+
+Cuando termina la cirugía, las asignaciones permanecen históricamente para
+garantizar trazabilidad, pero el equipo no se convierte en una entidad permanente.
+
+
+============================================================
+4. DOS CONCEPTOS DE "ROL"
+============================================================
+
+Hay que mantener SIEMPRE la separación entre:
+
+A. ROL DEL SISTEMA
+B. ROL CLÍNICO
+
+
+----------------------------------------
+A. ROL DEL SISTEMA
+----------------------------------------
+
+Determina qué puede hacer el usuario dentro de la aplicación.
+
+Ejemplos:
+
+PATIENT
+DOCTOR
+HEAD_NURSE
+SURGICAL_STAFF
+ADMIN
+AUDITOR
+
+Se representan mediante:
+
+system_roles
+permissions
+system_role_permissions
+user_system_roles
+
+
+----------------------------------------
+B. ROL CLÍNICO
+----------------------------------------
+
+Determina qué función puede desempeñar una persona dentro de una cirugía.
+
+Ejemplos:
+
+Cirujano
+Anestesiólogo
+Instrumentador quirúrgico
+Ayudante quirúrgico
+Perfusionista
+Enfermero
+Auxiliar
+
+Se representan mediante:
+
+clinical_roles
+professional_clinical_roles
+
+
+Un mismo usuario podría tener:
+
+Rol del sistema:
+DOCTOR
+
+Perfil profesional:
+Sí
+
+Roles clínicos:
+CIRUJANO
+
+
+Nunca mezclar ambos conceptos.
+
+
+============================================================
+5. ESPECIALIDADES Y PROCEDIMIENTOS
+============================================================
+
+El administrador puede configurar:
+
+- especialidades;
+- procedimientos quirúrgicos;
+- roles clínicos;
+- relación entre especialidades y procedimientos.
+
+Ejemplo:
+
+Especialidad:
+CIRUGÍA CARDIOVASCULAR
+
+Procedimientos:
+- bypass coronario
+- reemplazo valvular
+- reparación valvular
+
+
+La relación es MANY-TO-MANY porque un procedimiento eventualmente podría
+estar relacionado con más de una especialidad.
+
+Tablas:
+
+specialties
+surgical_procedures
+procedure_specialties
+
+
+============================================================
+6. ROLES PREDETERMINADOS VS ROLES SOLICITADOS
+============================================================
+
+Este concepto es MUY IMPORTANTE.
+
+Existe:
+
+procedure_role_defaults
+
+y existe:
+
+surgery_request_role_requirements
+
+
+NO representan lo mismo.
+
+
+----------------------------------------
+procedure_role_defaults
+----------------------------------------
+
+Representa una plantilla sugerida para un procedimiento.
+
+Ejemplo:
+
+Bypass coronario normalmente requiere:
+
+Cirujano       x1
+Anestesiólogo  x1
+Instrumentador x1
+Ayudante       x2
+Perfusionista  x1
+
+
+Es CONFIGURACIÓN.
+
+
+----------------------------------------
+surgery_request_role_requirements
+----------------------------------------
+
+Representa lo que el médico realmente solicitó para UN paciente específico.
+
+Ejemplo:
+
+Para este caso particular:
+
+Cirujano       x1
+Anestesiólogo  x2
+Instrumentador x1
+Ayudante       x3
+Perfusionista  x1
+
+
+Es INFORMACIÓN OPERACIONAL.
+
+
+El flujo debe ser:
+
+Configuración del procedimiento
+        ↓
+roles sugeridos
+        ↓
+el médico puede modificar
+        ↓
+requisitos específicos de la solicitud
+
+
+El médico puede agregar los roles que necesite y definir la cantidad.
+
+NO limitar artificialmente el número de profesionales de un rol.
+
+
+============================================================
+7. SOLICITUD DE CIRUGÍA VS CIRUGÍA
+============================================================
+
+Estas entidades NO deben fusionarse.
+
+surgery_requests
+
+representa:
+
+"el médico ha determinado que este paciente necesita determinado procedimiento
+y solicita que sea organizado".
+
+
+surgeries
+
+representa:
+
+"esa solicitud ya fue convertida en una cirugía programada y operacional".
+
+
+Una solicitud puede estar:
+
+DRAFT
+SUBMITTED
+UNDER_REVIEW
+APPROVED
+SCHEDULED
+REJECTED
+CANCELLED
+
+
+La cirugía posteriormente tiene su propio ciclo:
+
+SCHEDULED
+PREPARATION
+READY
+IN_OPERATING_ROOM
+ANESTHESIA
+IN_SURGERY
+CLOSING
+RECOVERY
+COMPLETED
+CANCELLED
+SUSPENDED
+
+
+============================================================
+8. PACIENTE NO ES LO MISMO QUE USUARIO
+============================================================
+
+La entidad patients está separada de users.
+
+Motivo:
+
+un paciente puede existir en el sistema sin necesariamente tener una cuenta
+de acceso.
+
+Ejemplo:
+
+un hospital podría registrar un paciente administrativamente y posteriormente
+ese paciente podría o no activar su cuenta.
+
+Por eso:
+
+patients.user_id
+
+puede ser NULL.
+
+En cambio, los profesionales que utilizan la plataforma sí tienen una identidad
+de aplicación asociada mediante professional_profiles.user_id.
+
+
+============================================================
+9. PROFESIONALES
+============================================================
+
+users
+    ↓
+professional_profiles
+    ├── professional_clinical_roles
+    └── professional_specialties
+
+
+professional_profiles representa que un usuario es un profesional del sistema.
+
+professional_specialties indica en qué especialidades está habilitado.
+
+professional_clinical_roles indica qué roles clínicos puede realizar.
+
+
+Ejemplo:
+
+Dra. Laura:
+
+system_role:
+DOCTOR
+
+specialties:
+Anestesiología
+
+clinical_roles:
+Anestesiólogo
+
+
+============================================================
+10. DISPONIBILIDAD
+============================================================
+
+professional_availability registra disponibilidad explícita del profesional.
+
+Ejemplos:
+
+AVAILABLE
+UNAVAILABLE
+ON_CALL
+
+
+IMPORTANTE:
+
+Esta tabla NO es la única fuente utilizada para decidir disponibilidad.
+
+Para asignar un profesional debe comprobarse:
+
+1. disponibilidad explícita;
+2. cirugías donde ya se encuentre asignado;
+3. superposición de horarios;
+4. rol clínico requerido;
+5. especialidad requerida, cuando aplique.
+
+La disponibilidad real es una combinación de reglas.
+
+
+============================================================
+11. PLANIFICACIÓN
+============================================================
+
+La enfermera jefe:
+
+- recibe la solicitud;
+- selecciona horario;
+- selecciona quirófano;
+- consulta profesionales;
+- asigna personas;
+- verifica que todos los requisitos estén cubiertos.
+
+surgeries almacena:
+
+- surgery_request_id;
+- operating_room_id;
+- scheduled_start;
+- scheduled_end;
+- scheduled_by_user_id;
+- coordinator_user_id;
+- status.
+
+
+surgery_staff_assignments representa cada persona asignada.
+
+Cada asignación debe corresponder a uno de los:
+
+surgery_request_role_requirements.
+
+
+============================================================
+12. INFORMACIÓN PREOPERATORIA
+============================================================
+
+El reto requiere información como:
+
+- identificación del paciente;
+- procedimiento;
+- sitio quirúrgico;
+- alergias;
+- información clínica relevante;
+- peso;
+- talla;
+- glucometría cuando aplique;
+- reserva de sangre;
+- otros datos institucionales.
+
+Los datos maestros del paciente viven en patients y patient_allergies.
+
+Los datos específicamente utilizados en la cirugía se registran mediante:
+
+surgery_preoperative_data
+
+
+Esta entidad funciona como SNAPSHOT operacional.
+
+Motivo:
+
+la información del paciente podría cambiar posteriormente y el histórico debe
+permitir reconstruir qué información se utilizó en el momento de la cirugía.
+
+
+============================================================
+13. CHECKLIST CONFIGURABLE
+============================================================
+
+Los checklists NO deben estar hardcodeados.
+
+El administrador debe poder configurar protocolos.
+
+La estructura es:
+
+checklist_templates
+    ↓
+checklist_template_phases
+    ↓
+checklist_template_items
+
+
+Ejemplo:
+
+Plantilla:
+Seguridad quirúrgica estándar v1
+
+
+Fase:
+PRE_ANESTHESIA
+
+Items:
+- Identidad del paciente
+- Procedimiento
+- Sitio quirúrgico
+- Alergias
+- Riesgos
+- Equipamiento
+
+
+Fase:
+PRE_INCISION
+
+Items:
+- Paciente confirmado
+- Procedimiento confirmado
+- Sitio confirmado
+- Equipo quirúrgico
+- Antibiótico profiláctico
+- Riesgos previstos
+
+
+Fase:
+SIGN_OUT
+
+Items:
+- Recuento instrumental
+- Recuento gasas
+- Muestras
+- Novedades
+- Procedimiento realizado
+
+
+============================================================
+14. VERSIONADO DE CHECKLIST
+============================================================
+
+Los protocolos cambian.
+
+Nunca modificar retroactivamente una plantilla publicada que haya sido usada.
+
+Si:
+
+Seguridad quirúrgica v1
+
+cambia, se crea:
+
+Seguridad quirúrgica v2
+
+
+No se modifica v1.
+
+
+Cuando una cirugía inicia su checklist se crea:
+
+surgery_checklists
+
+y posteriormente:
+
+surgery_checklist_items
+
+
+Los items de la cirugía COPIAN los campos relevantes del template.
+
+Esto es intencional.
+
+Se busca garantizar que una modificación futura del protocolo NO modifique
+cirugías históricas.
+
+
+============================================================
+15. RESPUESTAS DE CHECKLIST
+============================================================
+
+Un item puede requerir respuestas diferentes:
+
+BOOLEAN
+TEXT
+NUMBER
+SELECT
+MULTI_SELECT
+DATE
+TIME
+DATETIME
+CONFIRMATION
+etc.
+
+
+Por eso:
+
+response
+
+se almacena como JSONB.
+
+Esto es una excepción controlada a la normalización.
+
+JSONB NO debe utilizarse para reemplazar relaciones importantes del sistema.
+
+Se utiliza únicamente cuando la estructura es realmente variable.
+
+
+============================================================
+16. RESPONSABLE DE UNA VERIFICACIÓN
+============================================================
+
+surgery_checklist_items NO guarda simplemente:
+
+verified_by_user_id
+
+
+Preferimos:
+
+verified_by_assignment_id
+
+
+Motivo:
+
+queremos saber no solamente qué usuario confirmó algo, sino en qué calidad
+participaba dentro de ESA cirugía.
+
+Ejemplo:
+
+Carlos Pérez
+como
+ANESTESIÓLOGO
+
+confirmó alergias
+a las 08:13.
+
+
+Eso garantiza una trazabilidad clínica más precisa.
+
+
+============================================================
+17. REGLAS DE SEGURIDAD
+============================================================
+
+safety_rules permite configurar validaciones automáticas.
+
+Ejemplos conceptuales:
+
+- sitio quirúrgico no confirmado;
+- antibiótico pendiente;
+- datos obligatorios incompletos;
+- alergia pendiente de validación;
+- recuento instrumental inconsistente;
+- fase incompleta.
+
+
+Una regla contiene:
+
+scope_type
+scope_id
+condition JSONB
+severity
+blocking
+
+
+Ejemplo conceptual:
+
+IF
+initial_gauze_count != final_gauze_count
+
+THEN
+
+severity = CRITICAL
+blocking = true
+
+
+============================================================
+18. ALERTAS
+============================================================
+
+Cuando una regla detecta un problema se crea un registro en:
+
+alerts
+
+
+Una alerta conserva:
+
+- cirugía;
+- regla que la produjo;
+- severidad;
+- si es bloqueante;
+- origen;
+- mensaje;
+- hora;
+- reconocimiento;
+- resolución;
+- responsable;
+- notas.
+
+
+Estados:
+
+OPEN
+ACKNOWLEDGED
+RESOLVED
+DISMISSED
+
+
+Una alerta bloqueante abierta puede impedir cerrar una fase dependiendo de
+la configuración institucional.
+
+
+============================================================
+19. HITOS QUIRÚRGICOS
+============================================================
+
+El reto requiere rastrear momentos importantes.
+
+Se utiliza:
+
+surgery_milestones
+
+
+Ejemplos:
+
+PATIENT_ARRIVAL
+PRE_ANESTHESIA_COMPLETED
+ANESTHESIA_STARTED
+PRE_INCISION_COMPLETED
+SURGERY_STARTED
+SURGERY_ENDED
+SIGN_OUT_COMPLETED
+TRANSFERRED_TO_RECOVERY
+
+
+Esto permite calcular fácilmente:
+
+- duración total;
+- tiempo de anestesia;
+- tiempo quirúrgico;
+- tiempo entre fases;
+- demoras.
+
+
+============================================================
+20. SURGERY_EVENTS VS AUDIT_LOGS
+============================================================
+
+NO confundirlos.
+
+
+----------------------------------------
+surgery_events
+----------------------------------------
+
+Es el TIMELINE OPERACIONAL de una cirugía.
+
+Ejemplos:
+
+08:02 paciente ingresó
+08:08 checklist iniciado
+08:12 alergias confirmadas
+08:17 alerta generada
+08:20 alerta resuelta
+08:25 anestesia iniciada
+
+Debe ser prácticamente APPEND ONLY.
+
+
+----------------------------------------
+audit_logs
+----------------------------------------
+
+Es auditoría técnica/administrativa del sistema.
+
+Ejemplos:
+
+ADMIN cambió nombre de especialidad.
+ENFERMERA cambió horario de cirugía.
+ADMIN desactivó procedimiento.
+USUARIO modificó determinado registro.
+
+
+audit_logs puede guardar:
+
+old_values
+new_values
+metadata
+
+
+============================================================
+21. INCIDENTES / NOVEDADES
+============================================================
+
+No toda novedad necesariamente debe ser una alerta automática.
+
+Por eso existe:
+
+incidents
+
+
+Ejemplo:
+
+"Instrumental solicitado no se encontraba inicialmente disponible".
+
+
+Puede registrar:
+
+- categoría;
+- severidad;
+- descripción;
+- quién reportó;
+- cuándo;
+- estado;
+- quién resolvió;
+- resolución.
+
+
+============================================================
+22. PRINCIPIOS DE HISTORIAL
+============================================================
+
+NO eliminar físicamente información histórica relacionada con una cirugía.
+
+Especialidades, procedimientos, roles, usuarios, etc. deben preferiblemente
+desactivarse mediante:
+
+is_active = false
+
+cuando ya estén referenciados históricamente.
+
+
+No hacer CASCADE DELETE de información clínica histórica.
+
+La trazabilidad debe preservarse.
+
+
+============================================================
+23. MOTOR DE TRAZABILIDAD
+============================================================
+
+Para cualquier operación importante deberíamos ser capaces de responder:
+
+QUÉ ocurrió.
+QUIÉN lo hizo.
+CUÁNDO ocurrió.
+EN QUÉ CIRUGÍA.
+EN QUÉ ROL participaba.
+QUÉ RESULTADO tuvo.
+
+
+============================================================
+24. REGLAS DE NEGOCIO IMPORTANTES
+============================================================
+
+1. Un profesional no puede ocupar un rol clínico que no tenga registrado.
+
+2. Si un requerimiento dice:
+
+   Anestesiólogo x2
+
+   la cirugía no puede considerarse "equipo completo" teniendo uno solamente.
+
+3. La cantidad de un requerimiento debe ser mayor que cero.
+
+4. Un profesional no debe asignarse a dos cirugías con horarios incompatibles.
+
+5. Un quirófano no debe contener dos cirugías simultáneamente.
+
+6. scheduled_end debe ser posterior a scheduled_start.
+
+7. Un procedimiento solicitado debe estar habilitado para la especialidad bajo
+   la cual el médico realiza la solicitud.
+
+8. El médico debe pertenecer a esa especialidad.
+
+9. Si un requerimiento exige una especialidad específica, el profesional
+   asignado debe poseerla.
+
+10. Las plantillas publicadas no se modifican: se versionan.
+
+11. Una cirugía histórica nunca cambia porque cambie posteriormente un template.
+
+12. Los eventos quirúrgicos importantes son append-only.
+
+13. Las entidades de catálogo deben desactivarse, no borrarse cuando tengan
+    histórico.
+
+14. Las fases obligatorias del checklist deben completarse antes de cerrar la
+    cirugía.
+
+15. Una alerta bloqueante abierta puede impedir avanzar dependiendo del
+    protocolo.
+
+16. Si institucionalmente se permite continuar frente a un bloqueo, debe
+    requerirse:
+      - autorización;
+      - usuario;
+      - motivo;
+      - timestamp.
+
+Nunca simplemente "ignorar".
+
+17. La asignación de personal debe ser transaccional para evitar que dos
+    coordinadores asignen simultáneamente al mismo profesional.
+
+18. La asignación de quirófano debe comprobar conflicto horario.
+
+19. Edad no debe almacenarse como dato persistente.
+    Debe derivarse de birth_date.
+
+20. Todos los timestamps clínicos deben manejar timezone correctamente.
+
+
+============================================================
+25. DECISIONES TÉCNICAS DE BASE DE DATOS
+============================================================
+
+Motor recomendado:
+
+PostgreSQL.
+
+
+IDs:
+
+UUID.
+
+Preferiblemente UUIDv7 generados por backend o mediante una función compatible
+de la infraestructura elegida.
+
+Motivo:
+
+- identificadores globales;
+- menor acoplamiento;
+- mejor comportamiento temporal que UUIDv4;
+- permite escalar el sistema sin depender de secuencias centrales.
+
+
+Todos los timestamps de implementación deben ser:
+
+TIMESTAMPTZ
+
+y almacenarse en UTC.
+
+El timezone de la institución se utiliza únicamente para presentación.
+
+
+Nomenclatura:
+
+snake_case.
+
+
+JSONB:
+
+usar solamente para:
+
+- configuración flexible;
+- condiciones de reglas;
+- respuestas variables;
+- metadata;
+- snapshots pequeños cuando sea necesario.
+
+NO utilizar JSONB para relaciones que deberían ser tablas.
+
+
+============================================================
+26. SEGURIDAD Y DATOS CLÍNICOS
+============================================================
+
+La base contiene información potencialmente sensible.
+
+La implementación debe contemplar:
+
+- autorización por roles;
+- principio de mínimo privilegio;
+- cifrado en tránsito;
+- cifrado de almacenamiento según infraestructura;
+- auditoría;
+- evitar logs de aplicación con información clínica innecesaria;
+- trazabilidad de modificaciones;
+- respaldos;
+- políticas de retención.
+
+La base NO pretende reemplazar inicialmente toda la historia clínica electrónica.
+
+
+============================================================
+27. COSAS FUERA DE ALCANCE INICIAL
+============================================================
+
+NO diseñar inicialmente como parte del MVP:
+
+- facturación;
+- aseguradoras;
+- autorizaciones EPS completas;
+- farmacia completa;
+- inventario hospitalario completo;
+- historia clínica completa;
+- recetas;
+- contabilidad;
+- nómina;
+- interoperabilidad HL7/FHIR real;
+- IA predictiva;
+- ERP hospitalario.
+
+Se pueden dejar puntos de integración futura.
+
+============================================================
+28. MODELO DBML OFICIAL V1
+============================================================
+
+Usar el siguiente modelo como base actual.
+```
+
+Y justo debajo de ese contexto, tu compañero pega este DBML.
+
+---
+
+# DBML oficial V1
+
+```dbml
+Enum user_status {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+Enum appointment_status {
+  REQUESTED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+Enum surgery_request_status {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  SCHEDULED
+  REJECTED
+  CANCELLED
+}
+
+Enum surgery_status {
+  SCHEDULED
+  PREPARATION
+  READY
+  IN_OPERATING_ROOM
+  ANESTHESIA
+  IN_SURGERY
+  CLOSING
+  RECOVERY
+  COMPLETED
+  CANCELLED
+  SUSPENDED
+}
+
+Enum assignment_status {
+  ASSIGNED
+  CONFIRMED
+  REJECTED
+  CANCELLED
+}
+
+Enum availability_type {
+  AVAILABLE
+  UNAVAILABLE
+  ON_CALL
+}
+
+Enum checklist_status {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+Enum checklist_item_status {
+  PENDING
+  COMPLETED
+  WARNING
+  FAILED
+  NOT_APPLICABLE
+}
+
+Enum alert_severity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+Enum alert_status {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+Enum template_status {
+  DRAFT
+  PUBLISHED
+  RETIRED
+}
+
+Enum incident_status {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CANCELLED
+}
+
+Enum laterality {
+  LEFT
+  RIGHT
+  BILATERAL
+  NOT_APPLICABLE
+}
+
+Enum blood_reservation_status {
+  NOT_REQUIRED
+  PENDING
+  RESERVED
+  UNAVAILABLE
+}
+
+Enum milestone_type {
+  PATIENT_ARRIVAL
+  PRE_ANESTHESIA_COMPLETED
+  ANESTHESIA_STARTED
+  PRE_INCISION_COMPLETED
+  SURGERY_STARTED
+  SURGERY_ENDED
+  SIGN_OUT_COMPLETED
+  TRANSFERRED_TO_RECOVERY
+}
+
+
+/* =========================================================
+   INFRAESTRUCTURA / INSTITUCIÓN
+   ========================================================= */
+
+Table facilities {
+  id uuid [pk]
+
+  code varchar(50) [not null]
+  name varchar(150) [not null]
+
+  address varchar(250)
+  timezone varchar(80) [not null]
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    code [unique]
+  }
+}
+
+
+Table operating_rooms {
+  id uuid [pk]
+
+  facility_id uuid [not null]
+
+  code varchar(50) [not null]
+  name varchar(100) [not null]
+
+  description varchar(250)
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    (facility_id, code) [unique]
+    facility_id
+  }
+}
+
+
+/* =========================================================
+   IDENTIDAD / AUTORIZACIÓN
+   ========================================================= */
+
+Table users {
+  id uuid [pk]
+
+  first_name varchar(100) [not null]
+  last_name varchar(100) [not null]
+
+  email varchar(180) [not null]
+  phone varchar(50)
+
+  status user_status [not null, default: 'ACTIVE']
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    email [unique]
+    status
+  }
+}
+
+
+Table system_roles {
+  id uuid [pk]
+
+  code varchar(60) [not null]
+  name varchar(100) [not null]
+  description varchar(250)
+
+  is_active boolean [not null, default: true]
+
+  indexes {
+    code [unique]
+  }
+}
+
+
+Table permissions {
+  id uuid [pk]
+
+  code varchar(100) [not null]
+  name varchar(150) [not null]
+  description varchar(250)
+
+  indexes {
+    code [unique]
+  }
+}
+
+
+Table user_system_roles {
+  user_id uuid [not null]
+  system_role_id uuid [not null]
+
+  assigned_at timestamp [not null]
+
+  indexes {
+    (user_id, system_role_id) [pk]
+    system_role_id
+  }
+}
+
+
+Table system_role_permissions {
+  system_role_id uuid [not null]
+  permission_id uuid [not null]
+
+  indexes {
+    (system_role_id, permission_id) [pk]
+    permission_id
+  }
+}
+
+
+/* =========================================================
+   PACIENTES
+   ========================================================= */
+
+Table patients {
+  id uuid [pk]
+
+  user_id uuid
+
+  first_name varchar(100) [not null]
+  last_name varchar(100) [not null]
+
+  document_type varchar(30) [not null]
+  document_number varchar(50) [not null]
+
+  birth_date date
+
+  phone varchar(50)
+  email varchar(180)
+
+  emergency_contact_name varchar(150)
+  emergency_contact_phone varchar(50)
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    user_id [unique]
+    (document_type, document_number) [unique]
+    document_number
+  }
+}
+
+
+Table patient_allergies {
+  id uuid [pk]
+
+  patient_id uuid [not null]
+
+  substance varchar(150) [not null]
+  reaction varchar(250)
+  severity varchar(50)
+
+  notes text
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    patient_id
+    (patient_id, is_active)
+  }
+}
+
+
+/* =========================================================
+   PROFESIONALES
+   ========================================================= */
+
+Table professional_profiles {
+  id uuid [pk]
+
+  user_id uuid [not null]
+
+  professional_license varchar(100)
+  professional_number varchar(100)
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    user_id [unique]
+    professional_number
+  }
+}
+
+
+Table clinical_roles {
+  id uuid [pk]
+
+  code varchar(60) [not null]
+  name varchar(120) [not null]
+  description varchar(250)
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    code [unique]
+    is_active
+  }
+}
+
+
+Table specialties {
+  id uuid [pk]
+
+  code varchar(60) [not null]
+  name varchar(150) [not null]
+  description varchar(250)
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    code [unique]
+    is_active
+  }
+}
+
+
+Table professional_clinical_roles {
+  professional_id uuid [not null]
+  clinical_role_id uuid [not null]
+
+  created_at timestamp [not null]
+
+  indexes {
+    (professional_id, clinical_role_id) [pk]
+    clinical_role_id
+  }
+}
+
+
+Table professional_specialties {
+  professional_id uuid [not null]
+  specialty_id uuid [not null]
+
+  created_at timestamp [not null]
+
+  indexes {
+    (professional_id, specialty_id) [pk]
+    specialty_id
+  }
+}
+
+
+/* =========================================================
+   PROCEDIMIENTOS CONFIGURABLES
+   ========================================================= */
+
+Table surgical_procedures {
+  id uuid [pk]
+
+  code varchar(80) [not null]
+  name varchar(180) [not null]
+
+  description text
+
+  estimated_duration_minutes int
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    code [unique]
+    is_active
+  }
+}
+
+
+Table procedure_specialties {
+  procedure_id uuid [not null]
+  specialty_id uuid [not null]
+
+  indexes {
+    (procedure_id, specialty_id) [pk]
+    specialty_id
+  }
+}
+
+
+Table procedure_role_defaults {
+  id uuid [pk]
+
+  procedure_id uuid [not null]
+  clinical_role_id uuid [not null]
+
+  specialty_id uuid
+
+  default_quantity int [not null, default: 1]
+  is_required boolean [not null, default: true]
+
+  notes varchar(250)
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    procedure_id
+    clinical_role_id
+  }
+}
+
+
+/* =========================================================
+   CONSULTAS / CITAS
+   ========================================================= */
+
+Table appointments {
+  id uuid [pk]
+
+  patient_id uuid [not null]
+  doctor_id uuid [not null]
+  specialty_id uuid [not null]
+
+  scheduled_at timestamp [not null]
+
+  reason text
+
+  status appointment_status [not null, default: 'REQUESTED']
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    patient_id
+    doctor_id
+    specialty_id
+    scheduled_at
+    status
+  }
+}
+
+
+/* =========================================================
+   SOLICITUD DE CIRUGÍA
+   ========================================================= */
+
+Table surgery_requests {
+  id uuid [pk]
+
+  patient_id uuid [not null]
+  requesting_doctor_id uuid [not null]
+
+  source_appointment_id uuid
+
+  requesting_specialty_id uuid [not null]
+  procedure_id uuid [not null]
+
+  surgical_site varchar(150)
+  laterality laterality [not null, default: 'NOT_APPLICABLE']
+
+  clinical_summary text
+  medical_notes text
+
+  status surgery_request_status [not null, default: 'DRAFT']
+
+  created_at timestamp [not null]
+  submitted_at timestamp
+  updated_at timestamp [not null]
+
+  indexes {
+    patient_id
+    requesting_doctor_id
+    requesting_specialty_id
+    procedure_id
+    status
+    created_at
+  }
+}
+
+
+Table surgery_request_role_requirements {
+  id uuid [pk]
+
+  surgery_request_id uuid [not null]
+
+  clinical_role_id uuid [not null]
+  specialty_id uuid
+
+  quantity int [not null, default: 1]
+
+  is_required boolean [not null, default: true]
+
+  notes varchar(250)
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    surgery_request_id
+    clinical_role_id
+  }
+}
+
+
+/* =========================================================
+   PROGRAMACIÓN DE CIRUGÍA
+   ========================================================= */
+
+Table surgeries {
+  id uuid [pk]
+
+  surgery_request_id uuid [not null]
+
+  operating_room_id uuid [not null]
+
+  scheduled_by_user_id uuid [not null]
+  coordinator_user_id uuid
+
+  scheduled_start timestamp [not null]
+  scheduled_end timestamp [not null]
+
+  status surgery_status [not null, default: 'SCHEDULED']
+
+  schedule_notes text
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    surgery_request_id [unique]
+    operating_room_id
+    scheduled_start
+    scheduled_end
+    status
+  }
+}
+
+
+Table surgery_staff_assignments {
+  id uuid [pk]
+
+  surgery_id uuid [not null]
+
+  role_requirement_id uuid [not null]
+
+  professional_id uuid [not null]
+
+  status assignment_status [not null, default: 'ASSIGNED']
+
+  assigned_by_user_id uuid [not null]
+
+  assigned_at timestamp [not null]
+  confirmed_at timestamp
+
+  notes varchar(250)
+
+  indexes {
+    surgery_id
+    role_requirement_id
+    professional_id
+
+    (surgery_id, professional_id) [unique]
+  }
+}
+
+
+Table professional_availability {
+  id uuid [pk]
+
+  professional_id uuid [not null]
+
+  availability_type availability_type [not null]
+
+  starts_at timestamp [not null]
+  ends_at timestamp [not null]
+
+  notes varchar(250)
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    professional_id
+    starts_at
+    ends_at
+    availability_type
+  }
+}
+
+
+/* =========================================================
+   DATOS PREOPERATORIOS / SNAPSHOT
+   ========================================================= */
+
+Table surgery_preoperative_data {
+  id uuid [pk]
+
+  surgery_id uuid [not null]
+
+  weight_kg decimal(6,2)
+  height_cm decimal(6,2)
+
+  blood_glucose_mg_dl decimal(7,2)
+
+  blood_reservation_required boolean [not null, default: false]
+  blood_reservation_status blood_reservation_status [not null, default: 'NOT_REQUIRED']
+
+  relevant_clinical_information text
+
+  allergies_snapshot jsonb
+
+  additional_data jsonb
+
+  validated_by_user_id uuid
+  validated_at timestamp
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    surgery_id [unique]
+  }
+}
+
+
+/* =========================================================
+   PLANTILLAS DE CHECKLIST
+   ========================================================= */
+
+Table checklist_templates {
+  id uuid [pk]
+
+  code varchar(80) [not null]
+
+  name varchar(180) [not null]
+  description text
+
+  version int [not null]
+
+  status template_status [not null, default: 'DRAFT']
+
+  published_at timestamp
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    (code, version) [unique]
+    status
+  }
+}
+
+
+Table checklist_template_phases {
+  id uuid [pk]
+
+  template_id uuid [not null]
+
+  code varchar(80) [not null]
+  name varchar(150) [not null]
+
+  description text
+
+  display_order int [not null]
+
+  indexes {
+    template_id
+    (template_id, code) [unique]
+  }
+}
+
+
+Table checklist_template_items {
+  id uuid [pk]
+
+  phase_id uuid [not null]
+
+  code varchar(100) [not null]
+  label varchar(250) [not null]
+
+  description text
+
+  response_type varchar(50) [not null]
+
+  required boolean [not null, default: true]
+  blocking boolean [not null, default: false]
+
+  responsible_clinical_role_id uuid
+
+  validation_config jsonb
+
+  display_order int [not null]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    phase_id
+    responsible_clinical_role_id
+  }
+}
+
+
+Table procedure_checklist_templates {
+  procedure_id uuid [not null]
+  checklist_template_id uuid [not null]
+
+  is_default boolean [not null, default: false]
+
+  indexes {
+    (procedure_id, checklist_template_id) [pk]
+    checklist_template_id
+  }
+}
+
+
+/* =========================================================
+   CHECKLIST EJECUTADO
+   ========================================================= */
+
+Table surgery_checklists {
+  id uuid [pk]
+
+  surgery_id uuid [not null]
+
+  source_template_id uuid [not null]
+  template_code varchar(80) [not null]
+  template_name varchar(180) [not null]
+  template_version int [not null]
+
+  status checklist_status [not null, default: 'PENDING']
+
+  started_at timestamp
+  completed_at timestamp
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    surgery_id
+    source_template_id
+    status
+  }
+}
+
+
+Table surgery_checklist_items {
+  id uuid [pk]
+
+  surgery_checklist_id uuid [not null]
+
+  source_template_item_id uuid
+
+  phase_code varchar(80) [not null]
+  phase_name varchar(150) [not null]
+
+  item_code varchar(100) [not null]
+  label varchar(250) [not null]
+  description text
+
+  response_type varchar(50) [not null]
+
+  required boolean [not null]
+  blocking boolean [not null]
+
+  responsible_clinical_role_id uuid
+
+  status checklist_item_status [not null, default: 'PENDING']
+
+  response jsonb
+
+  verified_by_assignment_id uuid
+  verified_at timestamp
+
+  notes text
+
+  display_order int [not null]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    surgery_checklist_id
+    phase_code
+    item_code
+    status
+    verified_by_assignment_id
+  }
+}
+
+
+/* =========================================================
+   MOTOR DE REGLAS Y ALERTAS
+   ========================================================= */
+
+Table safety_rules {
+  id uuid [pk]
+
+  code varchar(100) [not null]
+  name varchar(180) [not null]
+
+  description text
+
+  scope_type varchar(60)
+  scope_id uuid
+
+  severity alert_severity [not null]
+
+  blocking boolean [not null, default: false]
+
+  condition jsonb [not null]
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    code [unique]
+    scope_type
+    scope_id
+    is_active
+  }
+}
+
+
+Table alerts {
+  id uuid [pk]
+
+  surgery_id uuid [not null]
+
+  safety_rule_id uuid
+
+  source_type varchar(60)
+  source_id uuid
+
+  severity alert_severity [not null]
+
+  blocking boolean [not null, default: false]
+
+  status alert_status [not null, default: 'OPEN']
+
+  title varchar(180) [not null]
+  message text [not null]
+
+  triggered_at timestamp [not null]
+
+  acknowledged_by_user_id uuid
+  acknowledged_at timestamp
+
+  resolved_by_user_id uuid
+  resolved_at timestamp
+
+  resolution_notes text
+
+  indexes {
+    surgery_id
+    safety_rule_id
+    severity
+    status
+    triggered_at
+  }
+}
+
+
+/* =========================================================
+   HITOS Y TIMELINE
+   ========================================================= */
+
+Table surgery_milestones {
+  id uuid [pk]
+
+  surgery_id uuid [not null]
+
+  milestone_type milestone_type [not null]
+
+  occurred_at timestamp [not null]
+
+  recorded_by_assignment_id uuid
+
+  notes varchar(250)
+
+  created_at timestamp [not null]
+
+  indexes {
+    (surgery_id, milestone_type) [unique]
+    occurred_at
+  }
+}
+
+
+Table surgery_events {
+  id uuid [pk]
+
+  surgery_id uuid [not null]
+
+  event_type varchar(100) [not null]
+
+  actor_user_id uuid
+  actor_assignment_id uuid
+
+  related_entity_type varchar(100)
+  related_entity_id uuid
+
+  payload jsonb
+
+  occurred_at timestamp [not null]
+
+  indexes {
+    surgery_id
+    event_type
+    actor_user_id
+    actor_assignment_id
+    occurred_at
+  }
+}
+
+
+/* =========================================================
+   INCIDENTES / NOVEDADES
+   ========================================================= */
+
+Table incidents {
+  id uuid [pk]
+
+  surgery_id uuid [not null]
+
+  category varchar(100)
+
+  severity alert_severity
+
+  description text [not null]
+
+  status incident_status [not null, default: 'OPEN']
+
+  reported_by_user_id uuid [not null]
+  reported_at timestamp [not null]
+
+  resolved_by_user_id uuid
+  resolved_at timestamp
+
+  resolution_notes text
+
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    surgery_id
+    category
+    severity
+    status
+    reported_at
+  }
+}
+
+
+/* =========================================================
+   AUDITORÍA GENERAL
+   ========================================================= */
+
+Table audit_logs {
+  id uuid [pk]
+
+  user_id uuid
+
+  entity_type varchar(100) [not null]
+  entity_id uuid
+
+  action varchar(100) [not null]
+
+  old_values jsonb
+  new_values jsonb
+
+  metadata jsonb
+
+  occurred_at timestamp [not null]
+
+  indexes {
+    user_id
+    entity_type
+    entity_id
+    action
+    occurred_at
+  }
+}
+
+
+/* =========================================================
+   RELACIONES
+   ========================================================= */
+
+Ref: operating_rooms.facility_id > facilities.id
+
+
+Ref: user_system_roles.user_id > users.id
+Ref: user_system_roles.system_role_id > system_roles.id
+
+Ref: system_role_permissions.system_role_id > system_roles.id
+Ref: system_role_permissions.permission_id > permissions.id
+
+
+Ref: patients.user_id > users.id
+
+Ref: patient_allergies.patient_id > patients.id
+
+
+Ref: professional_profiles.user_id > users.id
+
+Ref: professional_clinical_roles.professional_id > professional_profiles.id
+Ref: professional_clinical_roles.clinical_role_id > clinical_roles.id
+
+Ref: professional_specialties.professional_id > professional_profiles.id
+Ref: professional_specialties.specialty_id > specialties.id
+
+
+Ref: procedure_specialties.procedure_id > surgical_procedures.id
+Ref: procedure_specialties.specialty_id > specialties.id
+
+Ref: procedure_role_defaults.procedure_id > surgical_procedures.id
+Ref: procedure_role_defaults.clinical_role_id > clinical_roles.id
+Ref: procedure_role_defaults.specialty_id > specialties.id
+
+
+Ref: appointments.patient_id > patients.id
+Ref: appointments.doctor_id > professional_profiles.id
+Ref: appointments.specialty_id > specialties.id
+
+
+Ref: surgery_requests.patient_id > patients.id
+Ref: surgery_requests.requesting_doctor_id > professional_profiles.id
+Ref: surgery_requests.source_appointment_id > appointments.id
+Ref: surgery_requests.requesting_specialty_id > specialties.id
+Ref: surgery_requests.procedure_id > surgical_procedures.id
+
+
+Ref: surgery_request_role_requirements.surgery_request_id > surgery_requests.id
+Ref: surgery_request_role_requirements.clinical_role_id > clinical_roles.id
+Ref: surgery_request_role_requirements.specialty_id > specialties.id
+
+
+Ref: surgeries.surgery_request_id > surgery_requests.id
+Ref: surgeries.operating_room_id > operating_rooms.id
+Ref: surgeries.scheduled_by_user_id > users.id
+Ref: surgeries.coordinator_user_id > users.id
+
+
+Ref: surgery_staff_assignments.surgery_id > surgeries.id
+Ref: surgery_staff_assignments.role_requirement_id > surgery_request_role_requirements.id
+Ref: surgery_staff_assignments.professional_id > professional_profiles.id
+Ref: surgery_staff_assignments.assigned_by_user_id > users.id
+
+
+Ref: professional_availability.professional_id > professional_profiles.id
+
+
+Ref: surgery_preoperative_data.surgery_id > surgeries.id
+Ref: surgery_preoperative_data.validated_by_user_id > users.id
+
+
+Ref: checklist_template_phases.template_id > checklist_templates.id
+
+Ref: checklist_template_items.phase_id > checklist_template_phases.id
+Ref: checklist_template_items.responsible_clinical_role_id > clinical_roles.id
+
+Ref: procedure_checklist_templates.procedure_id > surgical_procedures.id
+Ref: procedure_checklist_templates.checklist_template_id > checklist_templates.id
+
+
+Ref: surgery_checklists.surgery_id > surgeries.id
+Ref: surgery_checklists.source_template_id > checklist_templates.id
+
+Ref: surgery_checklist_items.surgery_checklist_id > surgery_checklists.id
+Ref: surgery_checklist_items.source_template_item_id > checklist_template_items.id
+Ref: surgery_checklist_items.responsible_clinical_role_id > clinical_roles.id
+Ref: surgery_checklist_items.verified_by_assignment_id > surgery_staff_assignments.id
+
+
+Ref: alerts.surgery_id > surgeries.id
+Ref: alerts.safety_rule_id > safety_rules.id
+Ref: alerts.acknowledged_by_user_id > users.id
+Ref: alerts.resolved_by_user_id > users.id
+
+
+Ref: surgery_milestones.surgery_id > surgeries.id
+Ref: surgery_milestones.recorded_by_assignment_id > surgery_staff_assignments.id
+
+
+Ref: surgery_events.surgery_id > surgeries.id
+Ref: surgery_events.actor_user_id > users.id
+Ref: surgery_events.actor_assignment_id > surgery_staff_assignments.id
+
+
+Ref: incidents.surgery_id > surgeries.id
+Ref: incidents.reported_by_user_id > users.id
+Ref: incidents.resolved_by_user_id > users.id
+
+
+Ref: audit_logs.user_id > users.id
+```
+
+---
+
+# Cosas importantes que DBML no representa completamente
+
+Esto también se lo debes pasar al compañero, porque **que el diagrama acepte algo no significa que el dominio lo permita**.
+
+## Restricciones SQL adicionales
+
+Cuando lo pasemos de DBML a PostgreSQL, necesitaremos `CHECK`.
+
+Por ejemplo:
+
+```sql
+CHECK (scheduled_end > scheduled_start);
+
+CHECK (ends_at > starts_at);
+
+CHECK (quantity > 0);
+
+CHECK (default_quantity > 0);
+
+CHECK (estimated_duration_minutes IS NULL OR estimated_duration_minutes > 0);
+
+CHECK (weight_kg IS NULL OR weight_kg > 0);
+
+CHECK (height_cm IS NULL OR height_cm > 0);
+```
+
+---
+
+# Conflictos de quirófano
+
+Esto:
+
+```text
+Sala 3
+
+08:00 - 10:00 Cirugía A
+09:00 - 11:00 Cirugía B
+```
+
+debe ser imposible.
+
+En PostgreSQL podríamos posteriormente solucionarlo con ranges/exclusion constraints, además de validación desde backend.
+
+Conceptualmente:
+
+```text
+OperatingRoom
++
+TimeRange
+=
+NO OVERLAP
+```
+
+---
+
+# Conflictos de profesionales
+
+Lo mismo:
+
+```text
+Dra. Ana
+
+Cirugía A:
+08:00 - 10:00
+
+Cirugía B:
+09:00 - 11:00
+```
+
+No debería poder confirmarse.
+
+La validación tendrá que hacerse **dentro de una transacción**, porque no basta con:
+
+```text
+consultar disponibilidad
+→ esperar
+→ asignar
+```
+
+Dos usuarios podrían consultar simultáneamente y ambos verla disponible.
+
+Debe ser conceptualmente:
+
+```text
+BEGIN
+
+LOCK / VALIDACIÓN
+
+¿Sigue disponible?
+     │
+     ├── NO → error
+     │
+     └── SÍ
+           ↓
+       INSERT assignment
+
+COMMIT
+```
+
+Eso lo resolveremos cuando diseñemos backend.
+
+---
+
+# Por qué no puse `clinical_role_id` otra vez en la asignación
+
+Fíjate:
+
+```text
+surgery_staff_assignments
+    ↓
+role_requirement_id
+    ↓
+surgery_request_role_requirements
+    ↓
+clinical_role_id
+```
+
+Por tanto, hacer esto:
+
+```text
+assignment
+├ role_requirement_id
+├ clinical_role_id
+└ specialty_id
+```
+
+estaría duplicando información.
+
+Podría terminar ocurriendo algo absurdo:
+
+```text
+requirement:
+ANESTHESIOLOGIST
+
+assignment.clinical_role:
+SURGEON
+```
+
+Así que la asignación obtiene el rol **a través del requisito que está cubriendo**.
+
+Me parece más correcto normalizado.
+
+---
+
+# Por qué paciente y usuario están separados
+
+Este cambio respecto al modelo anterior es deliberado.
+
+No quiero:
+
+```text
+users
+   ↓
+patient_profiles
+```
+
+como requisito obligatorio.
+
+Porque estaríamos diciendo:
+
+> Para que alguien sea paciente necesariamente debe tener una cuenta de la aplicación.
+
+Y eso probablemente no será cierto.
+
+Ahora tenemos:
+
+```text
+Patient
+   │
+   └── user_id nullable
+```
+
+Por tanto:
+
+### Paciente creado por institución
+
+```text
+Patient
+user_id = NULL
+```
+
+### Paciente que tiene acceso a plataforma
+
+```text
+Patient
+user_id = UUID
+```
+
+Mucho más flexible.
+
+---
+
+# Una parte que quiero que mantengamos: snapshots
+
+Este punto es particularmente importante.
+
+Supongamos:
+
+### Octubre de 2026
+
+```text
+Alergias:
+Penicilina
+```
+
+Se realiza la cirugía.
+
+### Enero 2027
+
+Se actualiza:
+
+```text
+Alergias:
+Penicilina
+Látex
+```
+
+Si luego auditamos la cirugía de octubre, no podemos presentar:
+
+> Durante esa cirugía el sistema mostraba alergia al látex.
+
+Porque **eso sería históricamente falso**.
+
+Por eso:
+
+```text
+patient_allergies
+```
+
+representa el conocimiento actual.
+
+Mientras:
+
+```text
+surgery_preoperative_data.allergies_snapshot
+```
+
+representa:
+
+> lo que el sistema tenía registrado para esa cirugía.
+
+El mismo principio aplica al checklist.
+
+---
+
+# Checklist: por qué duplicamos información deliberadamente
+
+Esto parece raro inicialmente:
+
+```text
+checklist_template_items
+```
+
+tiene:
+
+```text
+label
+description
+response_type
+...
+```
+
+y:
+
+```text
+surgery_checklist_items
+```
+
+también.
+
+Eso normalmente parece una desnormalización.
+
+Aquí es **intencional**.
+
+Supongamos:
+
+```text
+2026
+
+¿Se verificó el antibiótico profiláctico?
+```
+
+Y en 2027 el administrador cambia el protocolo a:
+
+```text
+¿Se administró el antibiótico profiláctico
+dentro del intervalo definido por protocolo?
+```
+
+La cirugía de 2026 debe seguir mostrando exactamente el protocolo con el cual fue ejecutada.
+
+Por eso hacemos:
+
+```text
+TEMPLATE
+     ↓
+al iniciar cirugía
+     ↓
+SNAPSHOT
+     ↓
+SURGERY CHECKLIST
+```
+
+---
+
+# Tres tipos de histórico diferentes
+
+Esto también quiero dejarlo claro porque después suele confundirse.
+
+## 1. Estado actual de entidades
+
+Ejemplo:
+
+```text
+surgeries.status = IN_SURGERY
+```
+
+Responde:
+
+> ¿Cómo está ahora?
+
+---
+
+## 2. Timeline operacional
+
+```text
+surgery_events
+```
+
+Responde:
+
+> ¿Qué ocurrió durante esta cirugía?
+
+Ejemplo:
+
+```text
+08:12 Checklist iniciado
+08:15 Alergia confirmada
+08:18 Alerta generada
+08:22 Alerta resuelta
+```
+
+---
+
+## 3. Auditoría
+
+```text
+audit_logs
+```
+
+Responde:
+
+> ¿Quién modificó datos del sistema?
+
+Por ejemplo:
+
+```text
+09:13
+Nurse #10 cambió:
+
+scheduled_start
+
+08:00 → 09:00
+```
+
+Los tres tienen propósitos diferentes.
+
+---
+
+# Un detalle que considero clave: Milestones
+
+Podríamos registrar absolutamente todo solamente en:
+
+```text
+surgery_events
+```
+
+pero consultar indicadores sería más incómodo.
+
+Por eso mantenemos también:
+
+```text
+surgery_milestones
+```
+
+Así obtener:
+
+```text
+surgery_start
+surgery_end
+```
+
+es directo.
+
+Y podemos calcular:
+
+```text
+duración cirugía =
+SURGERY_ENDED - SURGERY_STARTED
+```
+
+sin analizar JSONs ni eventos genéricos.
+
+El documento específicamente pretende posteriormente analizar duración del procedimiento, tiempo de anestesia, tiempo quirúrgico, demoras y diferencias históricas. :chatgpt-content-reference{index="4"}
+
+---
+
+# Qué información NO metería en JSONB
+
+Quiero dejar esta regla establecida desde ahora.
+
+### Esto NO:
+
+```json
+{
+  "team": [
+    {
+      "doctor": "123",
+      "role": "anesthesiologist"
+    }
+  ]
+}
+```
+
+Debe ser relacional.
+
+### Esto sí puede ser JSON:
+
+```json
+{
+  "value": true,
+  "method": "verbal_confirmation"
+}
+```
+
+para una respuesta configurable de checklist.
+
+O:
+
+```json
+{
+  "operator": "neq",
+  "left": "gauze_initial",
+  "right": "gauze_final"
+}
+```
+
+para una configuración futura de reglas.
+
+---
+
+# Lo que todavía NO considero cerrado al 100 %
+
+Hay algunas cosas que podemos decidir durante implementación sin cambiar el corazón del modelo:
+
+1. Si paciente realmente tendrá autoservicio de citas en el MVP.
+2. Si utilizaremos autenticación propia, Entra ID, Cognito, Auth0, etc.
+3. Cómo se alimentará exactamente la disponibilidad.
+4. Si permitiremos que una persona cubra dos roles dentro de la misma cirugía.
+5. Si la enfermera jefe puede modificar los requerimientos solicitados por el médico o debe devolver la solicitud.
+6. Cómo se implementarán excepciones frente a alertas bloqueantes.
+7. Si una cirugía puede tener más de un procedimiento quirúrgico simultáneamente.
+8. Integraciones futuras con sistemas clínicos.
+9. Cuáles datos clínicos específicos exige finalmente la institución.
+
+**Ninguna de esas decisiones invalida actualmente el diseño principal.**
+
+---
+
+# Lo que sí considero cerrado conceptualmente
+
+Estas decisiones sí las trataría como pilares y no las cambiaría sin una razón fuerte:
+
+```text
+User ≠ Patient ≠ Professional
+```
+
+```text
+System Role ≠ Clinical Role
+```
+
+```text
+Surgery Request ≠ Surgery
+```
+
+```text
+Procedure Defaults ≠ Request Requirements
+```
+
+```text
+No permanent Team
+```
+
+```text
+Surgery Staff Assignment = ephemeral team
+```
+
+```text
+Checklist Template ≠ Surgery Checklist
+```
+
+```text
+Current Patient Data ≠ Surgical Snapshot
+```
+
+```text
+Surgery Events ≠ Audit Logs
+```
+
+```text
+Templates must be versioned
+```
+
+```text
+Clinical history must not be destroyed
+```
+
+Ese es el **modelo mental que todo el equipo debería compartir**.
+
+---
+
+## Y la arquitectura de la DB termina viéndose así
+
+```text
+                         ┌──────────────┐
+                         │    USERS     │
+                         └──────┬───────┘
+                    ┌───────────┼────────────┐
+                    ▼           ▼            ▼
+               SYSTEM ROLES  PATIENTS   PROFESSIONALS
+                                           │
+                                   ┌───────┴────────┐
+                                   ▼                ▼
+                              SPECIALTIES     CLINICAL ROLES
+                                   │                │
+                                   └───────┬────────┘
+                                           │
+                                           ▼
+                                   SURGICAL PROCEDURES
+                                           │
+                              Default Role Requirements
+                                           │
+                                           ▼
+PATIENT ── APPOINTMENT ── DOCTOR ── SURGERY REQUEST
+                                           │
+                                    Requested Roles
+                                           │
+                                           ▼
+                                      HEAD NURSE
+                                           │
+                    ┌──────────────────────┼─────────────────────┐
+                    ▼                      ▼                     ▼
+                SCHEDULE              OPERATING ROOM          STAFF
+                    │                      │                     │
+                    └──────────────────────┼─────────────────────┘
+                                           ▼
+                                        SURGERY
+                                           │
+              ┌────────────────────────────┼────────────────────────────┐
+              ▼                            ▼                            ▼
+         PREOP DATA                   STAFF ASSIGNMENTS             CHECKLIST
+              │                            │                            │
+              │                            │                       VALIDATIONS
+              │                            │                            │
+              │                            └──────────┬─────────────────┘
+              │                                       ▼
+              │                                    ALERTS
+              │                                       │
+              └───────────────────┬───────────────────┘
+                                  ▼
+                             SURGERY EVENTS
+                                  │
+                     ┌────────────┼─────────────┐
+                     ▼            ▼             ▼
+                 MILESTONES   INCIDENTS      AUDIT
+                     │
+                     ▼
+                  ANALYTICS
+```
+
+Con esto **yo daría por cerrada la arquitectura conceptual V1 de la DB** para poder seguir diseñando sin estar cambiando entidades cada dos días. Cuando pasemos a implementación sí haríamos una segunda revisión enfocada exclusivamente en PostgreSQL: constraints reales, índices parciales, exclusión de rangos, migraciones, RLS si aplica y rendimiento.

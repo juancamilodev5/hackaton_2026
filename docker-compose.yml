@@ -1,0 +1,25 @@
+# PostgreSQL 18 para desarrollo local.
+# Valores por defecto sobreescribibles con variables de entorno o un archivo .env:
+#   DB_NAME, DB_USER, DB_PASSWORD, DB_PORT
+# El usuario creado es dueño de la base (lo exige V1: ALTER DATABASE y CREATE EXTENSION).
+services:
+  postgres:
+    image: postgres:18
+    container_name: ulibre-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-ulibre}
+      POSTGRES_USER: ${DB_USER:-ulibre}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ulibre}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      # Desde la imagen 18 los datos viven bajo /var/lib/postgresql/18/...
+      - ulibre-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ulibre-pgdata:
