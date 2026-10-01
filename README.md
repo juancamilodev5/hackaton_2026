@@ -46,6 +46,19 @@ docker compose down -v && docker compose up -d
 Los datos demo programan la cirugía para **mañana a las 07:00** respecto al día en que se aplicó
 la migración V100; para moverla a "mañana" otra vez, reinicia la base.
 
+### Tests
+
+```bash
+./mvnw test
+```
+
+Necesita Docker: Testcontainers levanta un PostgreSQL 18 desechable y aplica las migraciones reales
+más los datos demo, sin tocar la base de desarrollo. Hay tres clases de test:
+
+- `UlibreApplicationTests`: arranque de la aplicación;
+- `CrudTest`: iteración 2;
+- `TableroTest`: flujo del tablero, alertas y portal del paciente (iteración 3).
+
 ## Variables de entorno
 
 | Variable         | Perfil default | Perfil dev (valor por defecto)                         |
@@ -134,6 +147,29 @@ Detalle de cada endpoint en `docs/implementado/iteracion-2-crud.md` y en Swagger
 | Datos preoperatorios | `/api/cirugias/{id}/preoperatorio` | `CIRUGIAS_VER` / `PREPARACION_QUIRURGICA_GESTIONAR` |
 | Incidentes | `/api/cirugias/{id}/incidentes` | `TABLERO_VER` / `INCIDENTES_GESTIONAR` |
 
+### Tablero, alertas y trazabilidad (iteración 3)
+
+Detalle en `docs/implementado/iteracion-3-tablero.md`. Lo que se registra en el tablero lo hace el
+**operador del tablero** de esa cirugía (`TABLERO_OPERAR` habilita la función, pero solo opera
+quien tenga `es_operador_tablero`). Las **confirmaciones clínicas** las hace la persona asignada en
+su rol, o el operador en su nombre.
+
+| Recurso | Ruta | Ver / operar |
+|---|---|---|
+| Checklist (iniciar, responder ítem, confirmar ítem, cerrar fase) | `/api/cirugias/{id}/checklist` | `TABLERO_VER` / `TABLERO_OPERAR` + operador (confirmar: `TABLERO_VER` + asignación vigente) |
+| Instrumental de la cirugía (snapshot, preparar sets e instrumentos) | `/api/cirugias/{id}/instrumental` | `CIRUGIAS_VER` o `TABLERO_VER` / `PREPARACION_QUIRURGICA_GESTIONAR` + asignación vigente |
+| Recuentos (inicial, agregados, final, confirmaciones por etapa) | `/api/cirugias/{id}/recuentos` | `TABLERO_VER` / `TABLERO_OPERAR` + operador (confirmar: `TABLERO_VER` + asignación vigente) |
+| Hitos (registrar, anular, corregir) | `/api/cirugias/{id}/hitos` | `TABLERO_VER` / `TABLERO_OPERAR` + operador |
+| Alertas (reconocer, resolver, descartar, excepción) | `/api/cirugias/{id}/alertas` | `TABLERO_VER` / `ALERTAS_GESTIONAR` |
+| Motor de reglas (reevaluar) | `POST /api/cirugias/{id}/reglas/evaluar` | `TABLERO_OPERAR` o `ALERTAS_GESTIONAR` |
+| Timeline de eventos | `/api/cirugias/{id}/eventos` | `TABLERO_VER` o `AUDITORIA_VER` |
+| Trazabilidad (hitos, tiempos, alertas, incidentes, timeline) | `/api/cirugias/{id}/trazabilidad` | `CALIDAD_VER`, `AUDITORIA_VER` o `TABLERO_VER` |
+| Indicadores de calidad | `/api/indicadores?desde&hasta` | `CALIDAD_VER` |
+| Auditoría administrativa (paginada) | `/api/auditoria` | `AUDITORIA_VER` |
+| Portal del paciente: mis datos, citas, solicitudes y cirugías | `/api/mi/paciente`, `/api/mi/citas`, `/api/mi/solicitudes`, `/api/mi/cirugias[/{id}]` | autenticado; solo lo propio (404 si no es suyo) |
+
+No hubo migración nueva: los permisos de la iteración 3 ya venían en la semilla V2.
+
 Convenciones: `POST` → 201 + `Location`; `DELETE` en catálogos **desactiva** (`activo=false`), no
 borra; los registros clínicos (cirugías, asignaciones, solicitudes, citas, incidentes) no tienen
 `DELETE`: se cancelan. Las listas grandes se paginan con `pagina` (desde 0) y `tamano` (20 por
@@ -183,8 +219,12 @@ Por funcionalidad (`com.hackaton.ulibre.*`):
 - `cirugias` — panel, programación, asignaciones, operador del tablero, preoperatorio
 - `incidentes` — novedades de una cirugía
 - `tablero` — endpoint del tablero, recuentos, hitos
-- `checklist`, `instrumental`, `alertas` — entidades y lecturas de cada parte (más el catálogo de
-  instrumental y las reglas de seguridad)
+- `checklist`, `instrumental`, `alertas` — entidades, lecturas y ejecución de cada parte (más el
+  catálogo de instrumental, las reglas de seguridad y el motor de reglas)
+- `eventos` — timeline operacional de la cirugía (`eventos_cirugia`)
+- `auditoria` — auditoría administrativa (`registros_auditoria`) y su consulta
+- `indicadores` — indicadores de calidad y trazabilidad de una cirugía
+- `portal` — "mis datos" del paciente autenticado
 - `comun` — zona horaria/reloj, manejo de errores, OpenAPI, paginación, base de catálogos
 
 Entidades JPA delgadas (FKs como UUID, sin relaciones bidireccionales); las lecturas del panel y el

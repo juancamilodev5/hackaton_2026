@@ -2,12 +2,17 @@ package com.hackaton.ulibre.incidentes;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+import com.hackaton.ulibre.cirugias.ParticipacionCirugia;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.Textos;
 import com.hackaton.ulibre.comun.UsuarioActual;
+import com.hackaton.ulibre.eventos.EventosCirugia;
+import com.hackaton.ulibre.eventos.TipoEvento;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,11 +23,16 @@ public class IncidentesService {
     private final IncidenteRepository incidentes;
     private final JdbcClient jdbc;
     private final Clock clock;
+    private final EventosCirugia eventos;
+    private final ParticipacionCirugia participacion;
 
-    public IncidentesService(IncidenteRepository incidentes, JdbcClient jdbc, Clock clock) {
+    public IncidentesService(IncidenteRepository incidentes, JdbcClient jdbc, Clock clock, EventosCirugia eventos,
+            ParticipacionCirugia participacion) {
         this.incidentes = incidentes;
         this.jdbc = jdbc;
         this.clock = clock;
+        this.eventos = eventos;
+        this.participacion = participacion;
     }
 
     @Transactional(readOnly = true)
@@ -44,7 +54,9 @@ public class IncidentesService {
         incidente.setEstado(EstadoIncidente.ABIERTO);
         incidente.setReportadoPorUsuarioId(UsuarioActual.id());
         incidente.setReportadoEn(LocalDateTime.now(clock));
-        return IncidenteResponse.de(incidentes.saveAndFlush(incidente));
+        incidentes.saveAndFlush(incidente);
+        registrar(incidente, TipoEvento.INCIDENTE_REPORTADO, null);
+        return IncidenteResponse.de(incidente);
     }
 
     /** Al pasar a RESUELTO se registra quién y cuándo; si se reabre, se limpian. */
@@ -63,8 +75,29 @@ public class IncidentesService {
             incidente.setResueltoPorUsuarioId(null);
             incidente.setResueltoEn(null);
         }
+        EstadoIncidente anterior = incidente.getEstado();
         incidente.setEstado(datos.estado());
-        return IncidenteResponse.de(incidentes.saveAndFlush(incidente));
+        incidentes.saveAndFlush(incidente);
+        registrar(incidente, TipoEvento.INCIDENTE_ACTUALIZADO, anterior);
+        return IncidenteResponse.de(incidente);
+    }
+
+    /** Sin la descripción (texto clínico libre): solo categoría, severidad y estado. */
+    private void registrar(Incidente incidente, TipoEvento tipo, EstadoIncidente anterior) {
+        Map<String, Object> datos = new LinkedHashMap<>();
+        if (incidente.getCategoria() != null) {
+            datos.put("categoria", incidente.getCategoria());
+        }
+        if (incidente.getSeveridad() != null) {
+            datos.put("severidad", incidente.getSeveridad().name());
+        }
+        if (anterior != null) {
+            datos.put("de", anterior.name());
+        }
+        datos.put("estado", incidente.getEstado().name());
+        eventos.registrar(incidente.getCirugiaId(), tipo,
+                participacion.asignacionVigente(incidente.getCirugiaId()).orElse(null), "incidentes",
+                incidente.getId(), datos);
     }
 
     private void exigirCirugia(UUID cirugiaId) {

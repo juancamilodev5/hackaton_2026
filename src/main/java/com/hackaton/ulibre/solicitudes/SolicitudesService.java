@@ -5,34 +5,48 @@ import java.time.LocalDateTime;
 import java.util.Objects;
 import java.util.UUID;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
+import com.hackaton.ulibre.cirugias.EstadoCirugia;
 import com.hackaton.ulibre.cirugias.Lateralidad;
+import com.hackaton.ulibre.cirugias.TransicionesCirugia;
 import com.hackaton.ulibre.comun.Pagina;
 import com.hackaton.ulibre.comun.Paginacion;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.ReglaNegocioException;
 import com.hackaton.ulibre.comun.Textos;
 import com.hackaton.ulibre.comun.UsuarioActual;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Solicitudes de cirugía y sus requerimientos de rol. Las reglas 7 y 8 y la cantidad > 0 las
  * garantiza la base; aquí solo se controlan las transiciones de estado y lo que la base no ve.
+ * Cada cambio queda en registros_auditoria.
  */
 @Service
 public class SolicitudesService {
+
+    private static final String TABLA = "solicitudes_cirugia";
+    private static final String TABLA_REQUERIMIENTOS = "requerimientos_roles_solicitud";
 
     private final SolicitudCirugiaRepository solicitudes;
     private final RequerimientoRolSolicitudRepository requerimientos;
     private final SolicitudesConsultas consultas;
     private final Clock clock;
+    private final JdbcClient jdbc;
+    private final Auditoria auditoria;
 
     public SolicitudesService(SolicitudCirugiaRepository solicitudes,
-            RequerimientoRolSolicitudRepository requerimientos, SolicitudesConsultas consultas, Clock clock) {
+            RequerimientoRolSolicitudRepository requerimientos, SolicitudesConsultas consultas, Clock clock,
+            JdbcClient jdbc, Auditoria auditoria) {
         this.solicitudes = solicitudes;
         this.requerimientos = requerimientos;
         this.consultas = consultas;
         this.clock = clock;
+        this.jdbc = jdbc;
+        this.auditoria = auditoria;
     }
 
     @Transactional(readOnly = true)
@@ -87,7 +101,9 @@ public class SolicitudesService {
             }
             requerimientos.flush();
         }
-        return obtener(solicitud.getId());
+        SolicitudCirugiaResponse creada = obtener(solicitud.getId());
+        auditoria.registrar(TABLA, creada.id(), AccionAuditoria.CREAR, null, creada);
+        return creada;
     }
 
     @Transactional
@@ -97,10 +113,13 @@ public class SolicitudesService {
             throw new ReglaNegocioException("Solo se editan solicitudes en BORRADOR o ENVIADA; esta está "
                     + solicitud.getEstado());
         }
+        SolicitudCirugiaResponse anterior = obtener(id);
         aplicarDatosClinicos(solicitud, datos.sitioQuirurgico(), datos.lateralidad(), datos.resumenClinico(),
                 datos.notasMedicas());
         solicitudes.saveAndFlush(solicitud);
-        return obtener(id);
+        SolicitudCirugiaResponse actualizada = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.ACTUALIZAR, anterior, actualizada);
+        return actualizada;
     }
 
     @Transactional
@@ -110,7 +129,9 @@ public class SolicitudesService {
         req.setSolicitudCirugiaId(solicitudId);
         aplicar(req, datos);
         req = requerimientos.saveAndFlush(req);
-        return requerimiento(solicitudId, req.getId());
+        RequerimientoResponse creado = requerimiento(solicitudId, req.getId());
+        auditoria.registrar(TABLA_REQUERIMIENTOS, creado.id(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
@@ -133,17 +154,23 @@ public class SolicitudesService {
                         + vigentes + " asignaciones vigentes");
             }
         }
+        RequerimientoResponse anterior = requerimiento(solicitudId, requerimientoId);
         aplicar(req, datos);
         requerimientos.saveAndFlush(req);
-        return requerimiento(solicitudId, requerimientoId);
+        RequerimientoResponse actualizado = requerimiento(solicitudId, requerimientoId);
+        auditoria.registrar(TABLA_REQUERIMIENTOS, requerimientoId, AccionAuditoria.ACTUALIZAR, anterior, actualizado);
+        return actualizado;
     }
 
     /** Con asignaciones (aunque estén canceladas) la FK fk_asignacion_requerimiento lo impide: 422. */
     @Transactional
     public void eliminarRequerimiento(UUID solicitudId, UUID requerimientoId) {
         exigirRequerimientosEditables(buscar(solicitudId));
-        requerimientos.delete(buscarRequerimiento(solicitudId, requerimientoId));
+        RequerimientoRolSolicitud req = buscarRequerimiento(solicitudId, requerimientoId);
+        RequerimientoResponse anterior = requerimiento(solicitudId, requerimientoId);
+        requerimientos.delete(req);
         requerimientos.flush();
+        auditoria.registrar(TABLA_REQUERIMIENTOS, requerimientoId, AccionAuditoria.ELIMINAR, anterior, null);
     }
 
     @Transactional
@@ -153,10 +180,13 @@ public class SolicitudesService {
         if (requerimientos.findAllBySolicitudCirugiaIdOrderByCreadoEnAscIdAsc(id).isEmpty()) {
             throw new ReglaNegocioException("La solicitud debe indicar al menos un rol clínico requerido");
         }
+        SolicitudCirugiaResponse anterior = obtener(id);
         solicitud.setEstado(EstadoSolicitudCirugia.ENVIADA);
         solicitud.setEnviadaEn(LocalDateTime.now(clock));
         solicitudes.saveAndFlush(solicitud);
-        return obtener(id);
+        SolicitudCirugiaResponse actualizada = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.CAMBIAR_ESTADO, anterior, actualizada);
+        return actualizada;
     }
 
     /** revisar, aprobar, rechazar y cancelar: solo cambian el estado. */
@@ -164,9 +194,12 @@ public class SolicitudesService {
     public SolicitudCirugiaResponse cambiarEstado(UUID id, EstadoSolicitudCirugia destino) {
         SolicitudCirugia solicitud = buscar(id);
         exigirTransicion(solicitud, destino);
+        SolicitudCirugiaResponse anterior = obtener(id);
         solicitud.setEstado(destino);
         solicitudes.saveAndFlush(solicitud);
-        return obtener(id);
+        SolicitudCirugiaResponse actualizada = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.CAMBIAR_ESTADO, anterior, actualizada);
+        return actualizada;
     }
 
     private SolicitudCirugia buscar(UUID id) {
@@ -194,11 +227,30 @@ public class SolicitudesService {
         }
     }
 
-    private static void exigirRequerimientosEditables(SolicitudCirugia solicitud) {
-        if (!solicitud.getEstado().admiteCambiosEnRequerimientos()) {
-            throw new ReglaNegocioException("Los requerimientos de una solicitud " + solicitud.getEstado()
-                    + " no se modifican");
+    /**
+     * Con la solicitud ya PROGRAMADA el médico todavía puede ajustar el equipo mientras la cirugía no
+     * haya empezado (estados reprogramables): así un requerimiento puede llegar a tener asignaciones y
+     * la comprobación de "no bajar la cantidad por debajo de las vigentes" tiene sentido.
+     */
+    private void exigirRequerimientosEditables(SolicitudCirugia solicitud) {
+        if (solicitud.getEstado().admiteCambiosEnRequerimientos()) {
+            return;
         }
+        if (solicitud.getEstado() == EstadoSolicitudCirugia.PROGRAMADA) {
+            EstadoCirugia cirugia = jdbc.sql("SELECT estado::text FROM cirugias WHERE solicitud_cirugia_id = :id")
+                    .param("id", solicitud.getId())
+                    .query(String.class)
+                    .optional()
+                    .map(EstadoCirugia::valueOf)
+                    .orElse(null);
+            if (cirugia != null && TransicionesCirugia.REPROGRAMABLES.contains(cirugia)) {
+                return;
+            }
+            throw new ReglaNegocioException("La cirugía ya está " + cirugia
+                    + ": los requerimientos solo se ajustan mientras esté PROGRAMADA, PREPARACION o LISTA");
+        }
+        throw new ReglaNegocioException("Los requerimientos de una solicitud " + solicitud.getEstado()
+                + " no se modifican");
     }
 
     private static void aplicarDatosClinicos(SolicitudCirugia solicitud, String sitio, Lateralidad lateralidad,

@@ -9,6 +9,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.Textos;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -18,20 +20,25 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * Procedimientos y su configuración. "Eliminar" un procedimiento lo desactiva (regla 13); las tablas
  * puente (especialidades, plantillas, sets e instrumentos predeterminados) sí se borran físicamente:
- * si una solicitud usa la relación procedimiento-especialidad, la FK lo impide (422).
+ * si una solicitud usa la relación procedimiento-especialidad, la FK lo impide (422). Cada cambio queda
+ * en registros_auditoria (las tablas puente, con el procedimiento como entidad).
  */
 @Service
 public class ProcedimientoService {
 
+    private static final String TABLA = "procedimientos_quirurgicos";
+
     private final ProcedimientoRepository procedimientos;
     private final RolPredeterminadoRepository rolesPredeterminados;
     private final JdbcClient jdbc;
+    private final Auditoria auditoria;
 
     public ProcedimientoService(ProcedimientoRepository procedimientos,
-            RolPredeterminadoRepository rolesPredeterminados, JdbcClient jdbc) {
+            RolPredeterminadoRepository rolesPredeterminados, JdbcClient jdbc, Auditoria auditoria) {
         this.procedimientos = procedimientos;
         this.rolesPredeterminados = rolesPredeterminados;
         this.jdbc = jdbc;
+        this.auditoria = auditoria;
     }
 
     // ------------------------------------------------------------------ procedimiento
@@ -53,21 +60,28 @@ public class ProcedimientoService {
         ProcedimientoQuirurgico p = new ProcedimientoQuirurgico();
         p.setActivo(true);
         aplicar(p, datos);
-        return ProcedimientoResponse.de(procedimientos.saveAndFlush(p));
+        ProcedimientoResponse creado = ProcedimientoResponse.de(procedimientos.saveAndFlush(p));
+        auditoria.registrar(TABLA, creado.id(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
     public ProcedimientoResponse actualizar(UUID id, ProcedimientoRequest datos) {
         ProcedimientoQuirurgico p = buscar(id);
+        ProcedimientoResponse anterior = ProcedimientoResponse.de(p);
         aplicar(p, datos);
-        return ProcedimientoResponse.de(procedimientos.saveAndFlush(p));
+        ProcedimientoResponse actualizado = ProcedimientoResponse.de(procedimientos.saveAndFlush(p));
+        auditoria.registrar(TABLA, id, AccionAuditoria.ACTUALIZAR, anterior, actualizado);
+        return actualizado;
     }
 
     @Transactional
     public void desactivar(UUID id) {
         ProcedimientoQuirurgico p = buscar(id);
+        ProcedimientoResponse anterior = ProcedimientoResponse.de(p);
         p.setActivo(false);
-        procedimientos.saveAndFlush(p);
+        auditoria.registrar(TABLA, id, AccionAuditoria.DESACTIVAR, anterior,
+                ProcedimientoResponse.de(procedimientos.saveAndFlush(p)));
     }
 
     // ------------------------------------------------------------------ especialidades
@@ -84,6 +98,8 @@ public class ProcedimientoService {
                 .param("procedimientoId", id)
                 .param("especialidadId", especialidadId)
                 .update();
+        auditoria.registrar("procedimiento_especialidades", id, AccionAuditoria.ASOCIAR, null,
+                Map.of("especialidadId", especialidadId));
     }
 
     @Transactional
@@ -99,6 +115,8 @@ public class ProcedimientoService {
         if (borradas == 0) {
             throw new RecursoNoEncontradoException("La especialidad no está habilitada para el procedimiento");
         }
+        auditoria.registrar("procedimiento_especialidades", id, AccionAuditoria.DESASOCIAR,
+                Map.of("especialidadId", especialidadId), null);
     }
 
     // ------------------------------------------------------------------ roles predeterminados
@@ -115,21 +133,30 @@ public class ProcedimientoService {
         RolPredeterminadoProcedimiento rol = new RolPredeterminadoProcedimiento();
         rol.setProcedimientoId(id);
         aplicar(rol, datos);
-        return rolPredeterminado(rolesPredeterminados.saveAndFlush(rol).getId());
+        RolPredeterminadoResponse creado = rolPredeterminado(rolesPredeterminados.saveAndFlush(rol).getId());
+        auditoria.registrar("roles_predeterminados_procedimiento", creado.id(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
     public RolPredeterminadoResponse actualizarRol(UUID id, UUID rolPredId, RolPredeterminadoRequest datos) {
         RolPredeterminadoProcedimiento rol = buscarRol(id, rolPredId);
+        RolPredeterminadoResponse anterior = rolPredeterminado(rolPredId);
         aplicar(rol, datos);
         rolesPredeterminados.saveAndFlush(rol);
-        return rolPredeterminado(rolPredId);
+        RolPredeterminadoResponse actualizado = rolPredeterminado(rolPredId);
+        auditoria.registrar("roles_predeterminados_procedimiento", rolPredId, AccionAuditoria.ACTUALIZAR, anterior,
+                actualizado);
+        return actualizado;
     }
 
     @Transactional
     public void borrarRol(UUID id, UUID rolPredId) {
-        rolesPredeterminados.delete(buscarRol(id, rolPredId));
+        RolPredeterminadoProcedimiento rol = buscarRol(id, rolPredId);
+        RolPredeterminadoResponse anterior = rolPredeterminado(rolPredId);
+        rolesPredeterminados.delete(rol);
         rolesPredeterminados.flush();
+        auditoria.registrar("roles_predeterminados_procedimiento", rolPredId, AccionAuditoria.ELIMINAR, anterior, null);
     }
 
     // ------------------------------------------------------------------ plantillas de checklist
@@ -160,6 +187,8 @@ public class ProcedimientoService {
                 .param("plantillaId", plantillaId)
                 .param("predeterminada", predeterminada)
                 .update();
+        auditoria.registrar("procedimiento_plantillas_checklist", id, AccionAuditoria.ASOCIAR, null,
+                Map.of("plantillaId", plantillaId, "esPredeterminada", predeterminada));
     }
 
     @Transactional
@@ -175,6 +204,8 @@ public class ProcedimientoService {
         if (borradas == 0) {
             throw new RecursoNoEncontradoException("La plantilla no está asociada al procedimiento");
         }
+        auditoria.registrar("procedimiento_plantillas_checklist", id, AccionAuditoria.DESASOCIAR,
+                Map.of("plantillaId", plantillaId), null);
     }
 
     // ------------------------------------------------------------------ instrumental predeterminado
@@ -193,6 +224,8 @@ public class ProcedimientoService {
                         """)
                 .params(parametrosPredeterminado(id, setId, datos))
                 .update();
+        auditoria.registrar("sets_predeterminados_procedimiento", id, AccionAuditoria.ASOCIAR, null,
+                parametrosPredeterminado(id, setId, datos));
     }
 
     @Transactional
@@ -216,6 +249,8 @@ public class ProcedimientoService {
                         """)
                 .params(parametrosPredeterminado(id, instrumentoId, datos))
                 .update();
+        auditoria.registrar("instrumentos_predeterminados_procedimiento", id, AccionAuditoria.ASOCIAR, null,
+                parametrosPredeterminado(id, instrumentoId, datos));
     }
 
     @Transactional
@@ -258,6 +293,7 @@ public class ProcedimientoService {
         if (borradas == 0) {
             throw new RecursoNoEncontradoException(mensaje);
         }
+        auditoria.registrar(tabla, id, AccionAuditoria.DESASOCIAR, Map.of(columna, otroId), null);
     }
 
     private static Map<String, Object> parametrosPredeterminado(UUID id, UUID otroId,

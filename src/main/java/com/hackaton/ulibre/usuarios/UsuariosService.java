@@ -7,6 +7,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.auth.EstadoUsuario;
 import com.hackaton.ulibre.auth.Usuario;
 import com.hackaton.ulibre.auth.UsuarioRepository;
@@ -23,24 +25,28 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Usuarios de la plataforma. No se borran (pueden haber firmado registros clínicos): "eliminar"
- * los deja INACTIVOS. El correo único lo garantiza uq_usuarios_correo (409).
+ * los deja INACTIVOS. El correo único lo garantiza uq_usuarios_correo (409). Cada cambio queda en
+ * registros_auditoria con UsuarioResponse (que nunca incluye el hash de la contraseña).
  */
 @Service
 public class UsuariosService {
 
     static final String ROL_ADMIN = "ADMIN";
+    private static final String TABLA = "usuarios";
 
     private final UsuarioRepository usuarios;
     private final UsuariosConsultas consultas;
     private final PasswordEncoder passwordEncoder;
     private final JdbcClient jdbc;
+    private final Auditoria auditoria;
 
     public UsuariosService(UsuarioRepository usuarios, UsuariosConsultas consultas, PasswordEncoder passwordEncoder,
-            JdbcClient jdbc) {
+            JdbcClient jdbc, Auditoria auditoria) {
         this.usuarios = usuarios;
         this.consultas = consultas;
         this.passwordEncoder = passwordEncoder;
         this.jdbc = jdbc;
+        this.auditoria = auditoria;
     }
 
     @Transactional(readOnly = true)
@@ -65,15 +71,20 @@ public class UsuariosService {
         if (datos.rolesSistema() != null) {
             asignarRoles(usuario.getId(), datos.rolesSistema());
         }
-        return obtener(usuario.getId());
+        UsuarioResponse creado = obtener(usuario.getId());
+        auditoria.registrar(TABLA, creado.id(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
     public UsuarioResponse actualizar(UUID id, UsuarioRequest datos) {
         Usuario usuario = buscar(id);
+        UsuarioResponse anterior = obtener(id);
         aplicar(usuario, datos.nombres(), datos.apellidos(), datos.correo(), datos.telefono());
         usuarios.saveAndFlush(usuario);
-        return obtener(id);
+        UsuarioResponse actualizado = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.ACTUALIZAR, anterior, actualizado);
+        return actualizado;
     }
 
     @Transactional
@@ -82,9 +93,12 @@ public class UsuariosService {
         if (estado != EstadoUsuario.ACTIVO && id.equals(UsuarioActual.id())) {
             throw new ReglaNegocioException("No puede desactivar o suspender su propio usuario");
         }
+        UsuarioResponse anterior = obtener(id);
         usuario.setEstado(estado);
         usuarios.saveAndFlush(usuario);
-        return obtener(id);
+        UsuarioResponse actualizado = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.CAMBIAR_ESTADO, anterior, actualizado);
+        return actualizado;
     }
 
     @Transactional
@@ -92,13 +106,19 @@ public class UsuariosService {
         Usuario usuario = buscar(id);
         usuario.setHashContrasena(passwordEncoder.encode(contrasena));
         usuarios.saveAndFlush(usuario);
+        // Solo consta que se cambió: ni el hash ni la contraseña van a la auditoría
+        auditoria.registrar(TABLA, id, AccionAuditoria.CAMBIAR_CONTRASENA, null, null);
     }
 
     @Transactional
     public UsuarioResponse reemplazarRoles(UUID id, List<String> roles) {
         buscar(id);
+        List<String> anteriores = consultas.roles(id);
         asignarRoles(id, roles);
-        return obtener(id);
+        UsuarioResponse actualizado = obtener(id);
+        auditoria.registrar("usuario_roles_sistema", id, AccionAuditoria.REEMPLAZAR, Map.of("roles", anteriores),
+                Map.of("roles", actualizado.roles()));
+        return actualizado;
     }
 
     @Transactional

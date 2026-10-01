@@ -12,6 +12,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.catalogos.RolClinico;
 import com.hackaton.ulibre.catalogos.RolClinicoRepository;
 import com.hackaton.ulibre.catalogos.RolClinicoVista;
@@ -26,18 +28,25 @@ import org.springframework.transaction.annotation.Transactional;
  * tg_plantillas_proteger, tg_fases_plantilla_proteger y tg_items_plantilla_proteger: aquí no se
  * repite esa comprobación, el error de la base sale como 422. Java solo valida las transiciones
  * (publicar desde BORRADOR, retirar desde PUBLICADA) y que lo que se publica tenga contenido.
+ * Cada cambio queda en registros_auditoria.
  */
 @Service
 public class PlantillaChecklistService {
+
+    private static final String TABLA = "plantillas_checklist";
+    private static final String TABLA_FASES = "fases_plantilla_checklist";
+    private static final String TABLA_ITEMS = "items_plantilla_checklist";
 
     private final PlantillaChecklistRepository plantillas;
     private final FasePlantillaChecklistRepository fases;
     private final ItemPlantillaChecklistRepository items;
     private final RolClinicoRepository roles;
     private final Clock clock;
+    private final Auditoria auditoria;
 
     public PlantillaChecklistService(PlantillaChecklistRepository plantillas, FasePlantillaChecklistRepository fases,
-            ItemPlantillaChecklistRepository items, RolClinicoRepository roles, Clock clock) {
+            ItemPlantillaChecklistRepository items, RolClinicoRepository roles, Clock clock, Auditoria auditoria) {
+        this.auditoria = auditoria;
         this.plantillas = plantillas;
         this.fases = fases;
         this.items = items;
@@ -73,27 +82,34 @@ public class PlantillaChecklistService {
         plantilla.setDescripcion(Textos.limpiar(datos.descripcion()));
         plantilla.setVersion(plantillas.maximaVersion(plantilla.getCodigo()) + 1);
         plantilla.setEstado(EstadoPlantilla.BORRADOR);
-        return detalle(plantillas.saveAndFlush(plantilla));
+        plantillas.saveAndFlush(plantilla);
+        auditoria.registrar(TABLA, plantilla.getId(), AccionAuditoria.CREAR, null, PlantillaResponse.de(plantilla));
+        return detalle(plantilla);
     }
 
     @Transactional
     public PlantillaDetalleResponse actualizar(UUID id, PlantillaRequest datos) {
         PlantillaChecklist plantilla = buscarPlantilla(id);
+        PlantillaResponse anterior = PlantillaResponse.de(plantilla);
         plantilla.setCodigo(Textos.codigo(datos.codigo()));
         plantilla.setNombre(Textos.limpiar(datos.nombre()));
         plantilla.setDescripcion(Textos.limpiar(datos.descripcion()));
-        return detalle(plantillas.saveAndFlush(plantilla));
+        plantillas.saveAndFlush(plantilla);
+        auditoria.registrar(TABLA, id, AccionAuditoria.ACTUALIZAR, anterior, PlantillaResponse.de(plantilla));
+        return detalle(plantilla);
     }
 
     /** Borra ítems, fases y plantilla; los triggers lo rechazan si no es BORRADOR. */
     @Transactional
     public void eliminar(UUID id) {
         PlantillaChecklist plantilla = buscarPlantilla(id);
+        PlantillaDetalleResponse anterior = detalle(plantilla);
         List<FasePlantillaChecklist> suyas = fases.findAllByPlantillaIdOrderByOrdenAscCodigoAsc(id);
         items.deleteAllInBatch(items.findAllByFaseIdInOrderByOrdenAscCodigoAsc(ids(suyas)));
         fases.deleteAllInBatch(suyas);
         plantillas.delete(plantilla);
         plantillas.flush();
+        auditoria.registrar(TABLA, id, AccionAuditoria.ELIMINAR, anterior, null);
     }
 
     @Transactional
@@ -116,9 +132,12 @@ public class PlantillaChecklistService {
         if (!vacias.isEmpty()) {
             throw new ReglaNegocioException("Fases sin ítems: " + String.join(", ", vacias));
         }
+        PlantillaResponse anterior = PlantillaResponse.de(plantilla);
         plantilla.setEstado(EstadoPlantilla.PUBLICADA);
         plantilla.setPublicadaEn(LocalDateTime.now(clock));
-        return detalle(plantillas.saveAndFlush(plantilla));
+        plantillas.saveAndFlush(plantilla);
+        auditoria.registrar(TABLA, id, AccionAuditoria.PUBLICAR, anterior, PlantillaResponse.de(plantilla));
+        return detalle(plantilla);
     }
 
     @Transactional
@@ -127,8 +146,11 @@ public class PlantillaChecklistService {
         if (plantilla.getEstado() != EstadoPlantilla.PUBLICADA) {
             throw new ReglaNegocioException("Solo se retira una plantilla PUBLICADA; esta está " + plantilla.getEstado());
         }
+        PlantillaResponse anterior = PlantillaResponse.de(plantilla);
         plantilla.setEstado(EstadoPlantilla.RETIRADA);
-        return detalle(plantillas.saveAndFlush(plantilla));
+        plantillas.saveAndFlush(plantilla);
+        auditoria.registrar(TABLA, id, AccionAuditoria.RETIRAR, anterior, PlantillaResponse.de(plantilla));
+        return detalle(plantilla);
     }
 
     /** Copia plantilla, fases e ítems a un BORRADOR con la siguiente versión del mismo código. */
@@ -169,6 +191,8 @@ public class PlantillaChecklistService {
             items.save(nuevo);
         }
         items.flush();
+        auditoria.registrar(TABLA, copia.getId(), AccionAuditoria.NUEVA_VERSION, PlantillaResponse.de(origen),
+                PlantillaResponse.de(copia));
         return detalle(copia);
     }
 
@@ -180,23 +204,31 @@ public class PlantillaChecklistService {
         FasePlantillaChecklist fase = new FasePlantillaChecklist();
         fase.setPlantillaId(plantillaId);
         aplicar(fase, datos);
-        return FasePlantillaResponse.de(fases.saveAndFlush(fase), List.of());
+        FasePlantillaResponse creada = FasePlantillaResponse.de(fases.saveAndFlush(fase), List.of());
+        auditoria.registrar(TABLA_FASES, fase.getId(), AccionAuditoria.CREAR, null, creada);
+        return creada;
     }
 
     @Transactional
     public FasePlantillaResponse actualizarFase(UUID plantillaId, UUID faseId, FasePlantillaRequest datos) {
         FasePlantillaChecklist fase = buscarFase(plantillaId, faseId);
+        FasePlantillaResponse anterior = FasePlantillaResponse.de(fase, List.of());
         aplicar(fase, datos);
         fases.saveAndFlush(fase);
+        auditoria.registrar(TABLA_FASES, faseId, AccionAuditoria.ACTUALIZAR, anterior,
+                FasePlantillaResponse.de(fase, List.of()));
         return FasePlantillaResponse.de(fase, itemsDe(List.of(fase)).getOrDefault(fase.getId(), List.of()));
     }
 
     @Transactional
     public void eliminarFase(UUID plantillaId, UUID faseId) {
         FasePlantillaChecklist fase = buscarFase(plantillaId, faseId);
+        FasePlantillaResponse anterior = FasePlantillaResponse.de(fase,
+                itemsDe(List.of(fase)).getOrDefault(faseId, List.of()));
         items.deleteAllInBatch(items.findAllByFaseIdOrderByOrdenAscCodigoAsc(faseId));
         fases.delete(fase);
         fases.flush();
+        auditoria.registrar(TABLA_FASES, faseId, AccionAuditoria.ELIMINAR, anterior, null);
     }
 
     // ---------------------------------------------------------------- ítems
@@ -207,21 +239,29 @@ public class PlantillaChecklistService {
         ItemPlantillaChecklist item = new ItemPlantillaChecklist();
         item.setFaseId(faseId);
         aplicar(item, datos);
-        return respuesta(items.saveAndFlush(item));
+        ItemPlantillaResponse creado = respuesta(items.saveAndFlush(item));
+        auditoria.registrar(TABLA_ITEMS, item.getId(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
     public ItemPlantillaResponse actualizarItem(UUID plantillaId, UUID faseId, UUID itemId,
             ItemPlantillaRequest datos) {
         ItemPlantillaChecklist item = buscarItem(plantillaId, faseId, itemId);
+        ItemPlantillaResponse anterior = respuesta(item);
         aplicar(item, datos);
-        return respuesta(items.saveAndFlush(item));
+        ItemPlantillaResponse actualizado = respuesta(items.saveAndFlush(item));
+        auditoria.registrar(TABLA_ITEMS, itemId, AccionAuditoria.ACTUALIZAR, anterior, actualizado);
+        return actualizado;
     }
 
     @Transactional
     public void eliminarItem(UUID plantillaId, UUID faseId, UUID itemId) {
-        items.delete(buscarItem(plantillaId, faseId, itemId));
+        ItemPlantillaChecklist item = buscarItem(plantillaId, faseId, itemId);
+        ItemPlantillaResponse anterior = respuesta(item);
+        items.delete(item);
         items.flush();
+        auditoria.registrar(TABLA_ITEMS, itemId, AccionAuditoria.ELIMINAR, anterior, null);
     }
 
     // ---------------------------------------------------------------- apoyo

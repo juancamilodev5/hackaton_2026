@@ -3,6 +3,8 @@ package com.hackaton.ulibre.citas;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.comun.Pagina;
 import com.hackaton.ulibre.comun.Paginacion;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
@@ -12,18 +14,22 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Las citas no se borran: se cancelan (PATCH /estado). */
+/** Las citas no se borran: se cancelan (PATCH /estado). Cada cambio queda en registros_auditoria. */
 @Service
 public class CitaService {
+
+    private static final String TABLA = "citas";
 
     private final CitaRepository citas;
     private final CitasConsultas consultas;
     private final JdbcClient jdbc;
+    private final Auditoria auditoria;
 
-    public CitaService(CitaRepository citas, CitasConsultas consultas, JdbcClient jdbc) {
+    public CitaService(CitaRepository citas, CitasConsultas consultas, JdbcClient jdbc, Auditoria auditoria) {
         this.citas = citas;
         this.consultas = consultas;
         this.jdbc = jdbc;
+        this.auditoria = auditoria;
     }
 
     @Transactional(readOnly = true)
@@ -43,7 +49,9 @@ public class CitaService {
         Cita cita = new Cita();
         cita.setEstado(EstadoCita.SOLICITADA);
         aplicar(cita, datos);
-        return obtener(citas.saveAndFlush(cita).getId());
+        CitaResponse creada = obtener(citas.saveAndFlush(cita).getId());
+        auditoria.registrar(TABLA, creada.id(), AccionAuditoria.CREAR, null, creada);
+        return creada;
     }
 
     @Transactional
@@ -53,9 +61,12 @@ public class CitaService {
             throw new ReglaNegocioException("La cita está " + cita.getEstado() + " y ya no se puede modificar");
         }
         validarReferencias(datos);
+        CitaResponse anterior = obtener(id);
         aplicar(cita, datos);
         citas.saveAndFlush(cita);
-        return obtener(id);
+        CitaResponse actualizada = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.ACTUALIZAR, anterior, actualizada);
+        return actualizada;
     }
 
     @Transactional
@@ -64,9 +75,12 @@ public class CitaService {
         if (!cita.getEstado().puedePasarA(destino)) {
             throw new ReglaNegocioException("Transición de estado no permitida: " + cita.getEstado() + " → " + destino);
         }
+        CitaResponse anterior = obtener(id);
         cita.setEstado(destino);
         citas.saveAndFlush(cita);
-        return obtener(id);
+        CitaResponse actualizada = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.CAMBIAR_ESTADO, anterior, actualizada);
+        return actualizada;
     }
 
     private Cita buscar(UUID id) {

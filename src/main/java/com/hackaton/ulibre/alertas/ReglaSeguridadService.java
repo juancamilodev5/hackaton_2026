@@ -3,6 +3,8 @@ package com.hackaton.ulibre.alertas;
 import java.util.List;
 import java.util.UUID;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.Textos;
 import org.springframework.stereotype.Service;
@@ -13,9 +15,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class ReglaSeguridadService {
 
     private final ReglaSeguridadRepository reglas;
+    private final Auditoria auditoria;
 
-    public ReglaSeguridadService(ReglaSeguridadRepository reglas) {
+    public ReglaSeguridadService(ReglaSeguridadRepository reglas, Auditoria auditoria) {
         this.reglas = reglas;
+        this.auditoria = auditoria;
     }
 
     @Transactional(readOnly = true)
@@ -33,6 +37,7 @@ public class ReglaSeguridadService {
     @Transactional
     public ReglaSeguridadResponse actualizar(UUID id, ReglaSeguridadRequest datos) {
         ReglaSeguridad regla = buscar(id);
+        ReglaSeguridadResponse anterior = ReglaSeguridadResponse.de(regla);
         regla.setNombre(Textos.limpiar(datos.nombre()));
         regla.setDescripcion(Textos.limpiar(datos.descripcion()));
         regla.setSeveridad(datos.severidad());
@@ -40,7 +45,9 @@ public class ReglaSeguridadService {
         if (datos.activo() != null) {
             regla.setActivo(datos.activo());
         }
-        return ReglaSeguridadResponse.de(reglas.saveAndFlush(regla));
+        ReglaSeguridadResponse actualizada = ReglaSeguridadResponse.de(reglas.saveAndFlush(regla));
+        auditoria.registrar("reglas_seguridad", id, AccionAuditoria.ACTUALIZAR, anterior, actualizada);
+        return actualizada;
     }
 
     private ReglaSeguridad buscar(UUID id) {

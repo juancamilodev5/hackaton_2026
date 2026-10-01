@@ -2,11 +2,15 @@ package com.hackaton.ulibre.cirugias;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 
+import com.hackaton.ulibre.alertas.MotorReglas;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.Textos;
 import com.hackaton.ulibre.comun.UsuarioActual;
+import com.hackaton.ulibre.eventos.EventosCirugia;
+import com.hackaton.ulibre.eventos.TipoEvento;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,13 +26,20 @@ public class PreoperatorioService {
     private final CirugiaRepository cirugias;
     private final JdbcClient jdbc;
     private final Clock clock;
+    private final EventosCirugia eventos;
+    private final MotorReglas motor;
+    private final ParticipacionCirugia participacion;
 
     public PreoperatorioService(DatosPreoperatoriosCirugiaRepository preoperatorios, CirugiaRepository cirugias,
-            JdbcClient jdbc, Clock clock) {
+            JdbcClient jdbc, Clock clock, EventosCirugia eventos, MotorReglas motor,
+            ParticipacionCirugia participacion) {
         this.preoperatorios = preoperatorios;
         this.cirugias = cirugias;
         this.jdbc = jdbc;
         this.clock = clock;
+        this.eventos = eventos;
+        this.motor = motor;
+        this.participacion = participacion;
     }
 
     @Transactional(readOnly = true)
@@ -55,7 +66,9 @@ public class PreoperatorioService {
         preop.setDatosAdicionales(datos.datosAdicionales() == null || datos.datosAdicionales().isNull() ? null
                 : datos.datosAdicionales().toString());
         invalidarValidacion(preop);
-        return respuesta(preoperatorios.saveAndFlush(preop));
+        preoperatorios.saveAndFlush(preop);
+        registrar(cirugiaId, TipoEvento.PREOPERATORIO_REGISTRADO, preop, Map.of());
+        return respuesta(preop);
     }
 
     @Transactional
@@ -63,7 +76,9 @@ public class PreoperatorioService {
         DatosPreoperatoriosCirugia preop = buscar(cirugiaId);
         preop.setCopiaAlergias(alergiasActivas(cirugiaId));
         invalidarValidacion(preop);
-        return respuesta(preoperatorios.saveAndFlush(preop));
+        preoperatorios.saveAndFlush(preop);
+        registrar(cirugiaId, TipoEvento.PREOPERATORIO_REGISTRADO, preop, Map.of("alergiasActualizadas", true));
+        return respuesta(preop);
     }
 
     @Transactional
@@ -71,7 +86,15 @@ public class PreoperatorioService {
         DatosPreoperatoriosCirugia preop = buscar(cirugiaId);
         preop.setValidadoPorUsuarioId(UsuarioActual.id());
         preop.setValidadoEn(LocalDateTime.now(clock));
-        return respuesta(preoperatorios.saveAndFlush(preop));
+        preoperatorios.saveAndFlush(preop);
+        registrar(cirugiaId, TipoEvento.PREOPERATORIO_VALIDADO, preop, Map.of());
+        return respuesta(preop);
+    }
+
+    private void registrar(UUID cirugiaId, TipoEvento tipo, DatosPreoperatoriosCirugia preop, Map<String, ?> datos) {
+        eventos.registrar(cirugiaId, tipo, participacion.asignacionVigente(cirugiaId).orElse(null),
+                "datos_preoperatorios_cirugia", preop.getId(), datos);
+        motor.evaluarAlConfirmar(cirugiaId);
     }
 
     /** Cualquier cambio obliga a validar de nuevo. */

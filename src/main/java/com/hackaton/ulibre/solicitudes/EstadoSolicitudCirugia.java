@@ -35,7 +35,10 @@ public enum EstadoSolicitudCirugia {
         return this == BORRADOR || this == ENVIADA;
     }
 
-    /** El médico puede ajustar los roles requeridos mientras la solicitud siga viva y sin programar. */
+    /**
+     * El médico puede ajustar los roles requeridos mientras la solicitud siga viva y sin programar.
+     * Con la solicitud PROGRAMADA, SolicitudesService además lo permite mientras la cirugía no haya empezado.
+     */
     public boolean admiteCambiosEnRequerimientos() {
         return this != PROGRAMADA && this != RECHAZADA && this != CANCELADA;
     }

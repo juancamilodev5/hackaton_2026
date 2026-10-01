@@ -12,6 +12,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.ReglaNegocioException;
 import com.hackaton.ulibre.comun.Textos;
@@ -21,10 +23,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Roles del sistema y sus permisos. ADMIN no se desactiva, no cambia de código y no pierde
- * permisos: el sistema no puede quedar sin nadie que lo administre.
+ * permisos: el sistema no puede quedar sin nadie que lo administre. Cada cambio queda en
+ * registros_auditoria.
  */
 @Service
 public class RolesSistemaService {
+
+    private static final String TABLA = "roles_sistema";
 
     private static final String SELECT_ROL = """
             SELECT r.id, r.codigo, r.nombre, r.descripcion, r.activo,
@@ -38,10 +43,12 @@ public class RolesSistemaService {
 
     private final RolSistemaRepository roles;
     private final JdbcClient jdbc;
+    private final Auditoria auditoria;
 
-    public RolesSistemaService(RolSistemaRepository roles, JdbcClient jdbc) {
+    public RolesSistemaService(RolSistemaRepository roles, JdbcClient jdbc, Auditoria auditoria) {
         this.roles = roles;
         this.jdbc = jdbc;
+        this.auditoria = auditoria;
     }
 
     @Transactional(readOnly = true)
@@ -74,7 +81,9 @@ public class RolesSistemaService {
         rol.setActivo(true);
         aplicar(rol, datos);
         roles.saveAndFlush(rol);
-        return obtener(rol.getId());
+        RolSistemaResponse creado = obtener(rol.getId());
+        auditoria.registrar(TABLA, creado.id(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
@@ -84,9 +93,12 @@ public class RolesSistemaService {
                 && (!ROL_ADMIN.equals(Textos.codigo(datos.codigo())) || Boolean.FALSE.equals(datos.activo()))) {
             throw new ReglaNegocioException("El rol " + ROL_ADMIN + " no puede cambiar de código ni desactivarse");
         }
+        RolSistemaResponse anterior = obtener(id);
         aplicar(rol, datos);
         roles.saveAndFlush(rol);
-        return obtener(id);
+        RolSistemaResponse actualizado = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.ACTUALIZAR, anterior, actualizado);
+        return actualizado;
     }
 
     @Transactional
@@ -95,8 +107,10 @@ public class RolesSistemaService {
         if (ROL_ADMIN.equals(rol.getCodigo())) {
             throw new ReglaNegocioException("El rol " + ROL_ADMIN + " no puede desactivarse");
         }
+        RolSistemaResponse anterior = obtener(id);
         rol.setActivo(false);
         roles.saveAndFlush(rol);
+        auditoria.registrar(TABLA, id, AccionAuditoria.DESACTIVAR, anterior, obtener(id));
     }
 
     /** Deja exactamente los permisos indicados: borra los que sobran e inserta los que faltan. */
@@ -115,7 +129,8 @@ public class RolesSistemaService {
         if (!inexistentes.isEmpty()) {
             throw new ReglaNegocioException("Permisos inexistentes: " + String.join(", ", inexistentes));
         }
-        if (ROL_ADMIN.equals(rol.getCodigo()) && !pedidos.containsAll(obtener(id).permisos())) {
+        List<String> anteriores = obtener(id).permisos();
+        if (ROL_ADMIN.equals(rol.getCodigo()) && !pedidos.containsAll(anteriores)) {
             throw new ReglaNegocioException("Al rol " + ROL_ADMIN + " no se le pueden quitar permisos");
         }
 
@@ -139,7 +154,10 @@ public class RolesSistemaService {
                         .update();
             }
         }
-        return obtener(id);
+        RolSistemaResponse actualizado = obtener(id);
+        auditoria.registrar("rol_sistema_permisos", id, AccionAuditoria.REEMPLAZAR, Map.of("permisos", anteriores),
+                Map.of("permisos", actualizado.permisos()));
+        return actualizado;
     }
 
     private static RolSistemaResponse fila(ResultSet rs) throws SQLException {

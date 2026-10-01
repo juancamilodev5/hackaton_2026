@@ -3,21 +3,31 @@ package com.hackaton.ulibre.pacientes;
 import java.util.List;
 import java.util.UUID;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.Textos;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** Alergias de un paciente. "Eliminar" desactiva: las copias en cirugías ya hechas no cambian. */
+/**
+ * Alergias de un paciente. "Eliminar" desactiva: las copias en cirugías ya hechas no cambian.
+ * Cada cambio queda en registros_auditoria.
+ */
 @Service
 public class AlergiaPacienteService {
 
+    private static final String TABLA = "alergias_paciente";
+
     private final AlergiaPacienteRepository alergias;
     private final PacienteService pacientes;
+    private final Auditoria auditoria;
 
-    public AlergiaPacienteService(AlergiaPacienteRepository alergias, PacienteService pacientes) {
+    public AlergiaPacienteService(AlergiaPacienteRepository alergias, PacienteService pacientes,
+            Auditoria auditoria) {
         this.alergias = alergias;
         this.pacientes = pacientes;
+        this.auditoria = auditoria;
     }
 
     @Transactional(readOnly = true)
@@ -40,21 +50,28 @@ public class AlergiaPacienteService {
         alergia.setPacienteId(pacienteId);
         alergia.setActivo(true);
         aplicar(alergia, datos);
-        return AlergiaResponse.de(alergias.saveAndFlush(alergia));
+        AlergiaResponse creada = AlergiaResponse.de(alergias.saveAndFlush(alergia));
+        auditoria.registrar(TABLA, creada.id(), AccionAuditoria.CREAR, null, creada);
+        return creada;
     }
 
     @Transactional
     public AlergiaResponse actualizar(UUID pacienteId, UUID alergiaId, AlergiaRequest datos) {
         AlergiaPaciente alergia = buscar(pacienteId, alergiaId);
+        AlergiaResponse anterior = AlergiaResponse.de(alergia);
         aplicar(alergia, datos);
-        return AlergiaResponse.de(alergias.saveAndFlush(alergia));
+        AlergiaResponse actualizada = AlergiaResponse.de(alergias.saveAndFlush(alergia));
+        auditoria.registrar(TABLA, alergiaId, AccionAuditoria.ACTUALIZAR, anterior, actualizada);
+        return actualizada;
     }
 
     @Transactional
     public void desactivar(UUID pacienteId, UUID alergiaId) {
         AlergiaPaciente alergia = buscar(pacienteId, alergiaId);
+        AlergiaResponse anterior = AlergiaResponse.de(alergia);
         alergia.setActivo(false);
-        alergias.saveAndFlush(alergia);
+        auditoria.registrar(TABLA, alergiaId, AccionAuditoria.DESACTIVAR, anterior,
+                AlergiaResponse.de(alergias.saveAndFlush(alergia)));
     }
 
     /** 404 también si la alergia existe pero es de otro paciente. */

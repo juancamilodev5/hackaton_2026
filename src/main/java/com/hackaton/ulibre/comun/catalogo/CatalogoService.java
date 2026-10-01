@@ -4,24 +4,38 @@ import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.Textos;
+import jakarta.persistence.Table;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * CRUD de un catálogo simple. "Eliminar" desactiva (activo = false): los catálogos con histórico
- * no se borran (regla 13) y las FKs sin CASCADE lo impedirían de todos modos.
+ * no se borran (regla 13) y las FKs sin CASCADE lo impedirían de todos modos. Cada cambio queda en
+ * registros_auditoria con los valores antes/después.
  */
 public abstract class CatalogoService<E extends Catalogo> {
 
     private final CatalogoRepository<E> repositorio;
     private final Supplier<E> nuevo;
     private final String noEncontrado;
+    private final String tabla;
+    private Auditoria auditoria;
 
     protected CatalogoService(CatalogoRepository<E> repositorio, Supplier<E> nuevo, String noEncontrado) {
         this.repositorio = repositorio;
         this.nuevo = nuevo;
         this.noEncontrado = noEncontrado;
+        this.tabla = nuevo.get().getClass().getAnnotation(Table.class).name();
+    }
+
+    /** Por setter para no obligar a cada subclase a recibirla en el constructor. */
+    @Autowired
+    void setAuditoria(Auditoria auditoria) {
+        this.auditoria = auditoria;
     }
 
     @Transactional(readOnly = true)
@@ -41,21 +55,28 @@ public abstract class CatalogoService<E extends Catalogo> {
         E entidad = nuevo.get();
         entidad.setActivo(true);
         aplicar(entidad, datos);
-        return CatalogoResponse.de(repositorio.saveAndFlush(entidad));
+        CatalogoResponse creado = CatalogoResponse.de(repositorio.saveAndFlush(entidad));
+        auditoria.registrar(tabla, creado.id(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
     public CatalogoResponse actualizar(UUID id, CatalogoRequest datos) {
         E entidad = buscar(id);
+        CatalogoResponse anterior = CatalogoResponse.de(entidad);
         aplicar(entidad, datos);
-        return CatalogoResponse.de(repositorio.saveAndFlush(entidad));
+        CatalogoResponse actualizado = CatalogoResponse.de(repositorio.saveAndFlush(entidad));
+        auditoria.registrar(tabla, id, AccionAuditoria.ACTUALIZAR, anterior, actualizado);
+        return actualizado;
     }
 
     @Transactional
     public void desactivar(UUID id) {
         E entidad = buscar(id);
+        CatalogoResponse anterior = CatalogoResponse.de(entidad);
         entidad.setActivo(false);
-        repositorio.saveAndFlush(entidad);
+        CatalogoResponse desactivado = CatalogoResponse.de(repositorio.saveAndFlush(entidad));
+        auditoria.registrar(tabla, id, AccionAuditoria.DESACTIVAR, anterior, desactivado);
     }
 
     /** También lo usan otros servicios para validar referencias con un 404 claro. */

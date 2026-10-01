@@ -8,15 +8,19 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+import com.hackaton.ulibre.alertas.MotorReglas;
 import com.hackaton.ulibre.catalogos.RolClinicoVista;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.ReglaNegocioException;
 import com.hackaton.ulibre.comun.Textos;
 import com.hackaton.ulibre.comun.UsuarioActual;
+import com.hackaton.ulibre.eventos.EventosCirugia;
+import com.hackaton.ulibre.eventos.TipoEvento;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,13 +41,20 @@ public class AsignacionesService {
     private final CirugiaRepository cirugias;
     private final JdbcClient jdbc;
     private final Clock clock;
+    private final EventosCirugia eventos;
+    private final MotorReglas motor;
+    private final ParticipacionCirugia participacion;
 
     public AsignacionesService(AsignacionPersonalCirugiaRepository asignaciones, CirugiaRepository cirugias,
-            JdbcClient jdbc, Clock clock) {
+            JdbcClient jdbc, Clock clock, EventosCirugia eventos, MotorReglas motor,
+            ParticipacionCirugia participacion) {
         this.asignaciones = asignaciones;
         this.cirugias = cirugias;
         this.jdbc = jdbc;
         this.clock = clock;
+        this.eventos = eventos;
+        this.motor = motor;
+        this.participacion = participacion;
     }
 
     /** Todas, también las rechazadas y canceladas (son histórico de la cirugía). */
@@ -76,12 +87,18 @@ public class AsignacionesService {
         asignacion.setConfirmadoEn(null);
         asignacion.setNotas(Textos.limpiar(datos.notas()));
         asignaciones.saveAndFlush(asignacion);
+        registrar(cirugiaId, TipoEvento.PERSONAL_ASIGNADO, asignacion.getId(),
+                Map.of("profesionalId", datos.profesionalId().toString(),
+                        "requerimientoRolId", datos.requerimientoRolId().toString(),
+                        "esOperadorTablero", asignacion.isEsOperadorTablero()));
         return obtener(asignacion.getId());
     }
 
     @Transactional
     public AsignacionResponse cambiarEstado(UUID cirugiaId, UUID asignacionId, EstadoAsignacion nuevo) {
         AsignacionPersonalCirugia asignacion = buscar(cirugiaId, asignacionId);
+        EstadoAsignacion anterior = asignacion.getEstado();
+        boolean eraOperador = asignacion.isEsOperadorTablero();
         if (!VIGENTES.contains(asignacion.getEstado()) || nuevo == EstadoAsignacion.ASIGNADA
                 || nuevo == asignacion.getEstado()) {
             throw new ReglaNegocioException("Cambio de estado no permitido: " + asignacion.getEstado() + " → "
@@ -94,6 +111,11 @@ public class AsignacionesService {
             asignacion.setEsOperadorTablero(false);
         }
         asignaciones.saveAndFlush(asignacion);
+        registrar(cirugiaId, TipoEvento.ASIGNACION_ESTADO_CAMBIADO, asignacionId,
+                Map.of("de", anterior.name(), "a", nuevo.name()));
+        if (eraOperador && !asignacion.isEsOperadorTablero()) {
+            registrar(cirugiaId, TipoEvento.OPERADOR_RETIRADO, asignacionId, Map.of());
+        }
         return obtener(asignacionId);
     }
 
@@ -107,9 +129,11 @@ public class AsignacionesService {
         operadorVigente(cirugiaId).filter(a -> !a.getId().equals(asignacionId)).ifPresent(actual -> {
             actual.setEsOperadorTablero(false);
             asignaciones.saveAndFlush(actual);
+            registrar(cirugiaId, TipoEvento.OPERADOR_RETIRADO, actual.getId(), Map.of());
         });
         nueva.setEsOperadorTablero(true);
         asignaciones.saveAndFlush(nueva);
+        registrar(cirugiaId, TipoEvento.OPERADOR_DESIGNADO, asignacionId, Map.of());
         return obtener(asignacionId);
     }
 
@@ -119,7 +143,15 @@ public class AsignacionesService {
         operadorVigente(cirugiaId).ifPresent(actual -> {
             actual.setEsOperadorTablero(false);
             asignaciones.saveAndFlush(actual);
+            registrar(cirugiaId, TipoEvento.OPERADOR_RETIRADO, actual.getId(), Map.of());
         });
+    }
+
+    /** Evento de la cirugía (actor: la asignación del usuario si participa) y reevaluación de reglas al confirmar. */
+    private void registrar(UUID cirugiaId, TipoEvento tipo, UUID asignacionId, Map<String, ?> datos) {
+        eventos.registrar(cirugiaId, tipo, participacion.asignacionVigente(cirugiaId).orElse(null),
+                "asignaciones_personal_cirugia", asignacionId, datos);
+        motor.evaluarAlConfirmar(cirugiaId);
     }
 
     private Optional<AsignacionPersonalCirugia> operadorVigente(UUID cirugiaId) {

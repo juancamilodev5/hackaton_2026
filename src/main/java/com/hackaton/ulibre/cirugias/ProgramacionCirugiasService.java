@@ -8,8 +8,12 @@ import static com.hackaton.ulibre.comun.Filas.uuid;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
+import com.hackaton.ulibre.alertas.Momento;
+import com.hackaton.ulibre.alertas.MotorReglas;
 import com.hackaton.ulibre.catalogos.Quirofano;
 import com.hackaton.ulibre.catalogos.QuirofanoRepository;
 import com.hackaton.ulibre.catalogos.QuirofanoVista;
@@ -17,6 +21,8 @@ import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
 import com.hackaton.ulibre.comun.ReglaNegocioException;
 import com.hackaton.ulibre.comun.Textos;
 import com.hackaton.ulibre.comun.UsuarioActual;
+import com.hackaton.ulibre.eventos.EventosCirugia;
+import com.hackaton.ulibre.eventos.TipoEvento;
 import com.hackaton.ulibre.solicitudes.EstadoSolicitudCirugia;
 import com.hackaton.ulibre.solicitudes.SolicitudCirugia;
 import com.hackaton.ulibre.solicitudes.SolicitudCirugiaRepository;
@@ -38,14 +44,21 @@ public class ProgramacionCirugiasService {
     private final QuirofanoRepository quirofanos;
     private final JdbcClient jdbc;
     private final Clock clock;
+    private final MotorReglas motor;
+    private final EventosCirugia eventos;
+    private final ParticipacionCirugia participacion;
 
     public ProgramacionCirugiasService(CirugiaRepository cirugias, SolicitudCirugiaRepository solicitudes,
-            QuirofanoRepository quirofanos, JdbcClient jdbc, Clock clock) {
+            QuirofanoRepository quirofanos, JdbcClient jdbc, Clock clock, MotorReglas motor,
+            EventosCirugia eventos, ParticipacionCirugia participacion) {
         this.cirugias = cirugias;
         this.solicitudes = solicitudes;
         this.quirofanos = quirofanos;
         this.jdbc = jdbc;
         this.clock = clock;
+        this.motor = motor;
+        this.eventos = eventos;
+        this.participacion = participacion;
     }
 
     @Transactional
@@ -85,6 +98,9 @@ public class ProgramacionCirugiasService {
 
         solicitud.setEstado(EstadoSolicitudCirugia.PROGRAMADA);
         solicitudes.saveAndFlush(solicitud);
+        eventos.registrar(cirugia.getId(), TipoEvento.CIRUGIA_PROGRAMADA, null, "cirugias", cirugia.getId(),
+                horario(cirugia));
+        motor.evaluarAlConfirmar(cirugia.getId());
         return detalle(cirugia.getId());
     }
 
@@ -97,21 +113,38 @@ public class ProgramacionCirugiasService {
         if (!datos.quirofanoId().equals(cirugia.getQuirofanoId())) {
             exigirQuirofanoActivo(datos.quirofanoId());
         }
+        Map<String, Object> antes = horario(cirugia);
         cirugia.setQuirofanoId(datos.quirofanoId());
         cirugia.setInicioProgramado(datos.inicioProgramado());
         cirugia.setFinProgramado(datos.finProgramado());
         cirugia.setCoordinadorUsuarioId(datos.coordinadorUsuarioId());
         cirugia.setNotasProgramacion(Textos.limpiar(datos.notasProgramacion()));
         cirugias.saveAndFlush(cirugia);
+        eventos.registrar(id, TipoEvento.CIRUGIA_REPROGRAMADA, null, "cirugias", id,
+                Map.of("antes", antes, "despues", horario(cirugia)));
+        motor.evaluarAlConfirmar(id);
         return detalle(id);
     }
 
+    /**
+     * Antes de EN_CIRUGIA se evalúan las reglas en su propia transacción (primera operación, antes de
+     * escribir nada): las alertas quedan guardadas aunque el trigger de instrumental rechace el cambio.
+     * COMPLETADA exige el checklist completado (regla 14 del maestro; la base no lo cubre).
+     */
     @Transactional
     public ProgramacionCirugiaResponse cambiarEstado(UUID id, CambioEstadoCirugiaRequest datos) {
+        if (datos.estado() == EstadoCirugia.EN_CIRUGIA) {
+            participacion.exigirCirugia(id);
+            motor.evaluar(id, Momento.inicioCirugia());
+        }
         Cirugia cirugia = buscar(id);
-        TransicionesCirugia.validar(cirugia.getEstado(), datos.estado());
+        EstadoCirugia anterior = cirugia.getEstado();
+        TransicionesCirugia.validar(anterior, datos.estado());
+        if (datos.estado() == EstadoCirugia.COMPLETADA) {
+            exigirChecklistCompletado(id);
+        }
+        String motivo = Textos.limpiar(datos.motivo());
         if (TransicionesCirugia.esTerminal(datos.estado())) {
-            String motivo = Textos.limpiar(datos.motivo());
             if (motivo == null) {
                 throw new ReglaNegocioException("El motivo es obligatorio para " + datos.estado());
             }
@@ -121,7 +154,36 @@ public class ProgramacionCirugiasService {
         }
         cirugia.setEstado(datos.estado());
         cirugias.saveAndFlush(cirugia);
+
+        Map<String, Object> cambio = new LinkedHashMap<>();
+        cambio.put("de", anterior.name());
+        cambio.put("a", datos.estado().name());
+        if (motivo != null) {
+            cambio.put("motivo", motivo);
+        }
+        eventos.registrar(id, TipoEvento.ESTADO_CAMBIADO, participacion.asignacionVigente(id).orElse(null),
+                "cirugias", id, cambio);
+        motor.evaluarAlConfirmar(id);
         return detalle(id);
+    }
+
+    private void exigirChecklistCompletado(UUID cirugiaId) {
+        String estado = jdbc.sql("SELECT estado::text FROM checklists_cirugia WHERE cirugia_id = :id")
+                .param("id", cirugiaId)
+                .query(String.class)
+                .optional()
+                .orElse(null);
+        if (!"COMPLETADO".equals(estado)) {
+            throw new ReglaNegocioException("No se puede completar la cirugía: el checklist "
+                    + (estado == null ? "no se ha iniciado" : "está " + estado)
+                    + " (todas sus fases deben estar cerradas)");
+        }
+    }
+
+    private static Map<String, Object> horario(Cirugia c) {
+        return Map.of("quirofanoId", c.getQuirofanoId().toString(),
+                "inicio", c.getInicioProgramado().toString(),
+                "fin", c.getFinProgramado().toString());
     }
 
     @Transactional(readOnly = true)

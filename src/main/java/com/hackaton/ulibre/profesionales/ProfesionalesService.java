@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.auth.UsuarioRepository;
 import com.hackaton.ulibre.comun.Pagina;
 import com.hackaton.ulibre.comun.Paginacion;
@@ -18,22 +20,27 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Perfiles profesionales y sus roles clínicos y especialidades. Un perfil no se borra: puede estar
- * en asignaciones y solicitudes históricas; "eliminar" lo deja inactivo.
+ * en asignaciones y solicitudes históricas; "eliminar" lo deja inactivo. Cada cambio queda en
+ * registros_auditoria (roles clínicos y especialidades, con el perfil completo antes/después).
  */
 @Service
 public class ProfesionalesService {
+
+    private static final String TABLA = "perfiles_profesionales";
 
     private final PerfilProfesionalRepository perfiles;
     private final UsuarioRepository usuarios;
     private final ProfesionalesConsultas consultas;
     private final JdbcClient jdbc;
+    private final Auditoria auditoria;
 
     public ProfesionalesService(PerfilProfesionalRepository perfiles, UsuarioRepository usuarios,
-            ProfesionalesConsultas consultas, JdbcClient jdbc) {
+            ProfesionalesConsultas consultas, JdbcClient jdbc, Auditoria auditoria) {
         this.perfiles = perfiles;
         this.usuarios = usuarios;
         this.consultas = consultas;
         this.jdbc = jdbc;
+        this.auditoria = auditoria;
     }
 
     @Transactional(readOnly = true)
@@ -67,41 +74,54 @@ public class ProfesionalesService {
         perfil.setNumeroProfesional(Textos.limpiar(datos.numeroProfesional()));
         perfil.setActivo(true);
         perfiles.saveAndFlush(perfil);
-        return obtener(perfil.getId());
+        ProfesionalResponse creado = obtener(perfil.getId());
+        auditoria.registrar(TABLA, creado.id(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
     public ProfesionalResponse actualizar(UUID id, ProfesionalRequest datos) {
         PerfilProfesional perfil = buscar(id);
+        ProfesionalResponse anterior = obtener(id);
         perfil.setLicenciaProfesional(Textos.limpiar(datos.licenciaProfesional()));
         perfil.setNumeroProfesional(Textos.limpiar(datos.numeroProfesional()));
         if (datos.activo() != null) {
             perfil.setActivo(datos.activo());
         }
         perfiles.saveAndFlush(perfil);
-        return obtener(id);
+        ProfesionalResponse actualizado = obtener(id);
+        auditoria.registrar(TABLA, id, AccionAuditoria.ACTUALIZAR, anterior, actualizado);
+        return actualizado;
     }
 
     @Transactional
     public void desactivar(UUID id) {
         PerfilProfesional perfil = buscar(id);
+        ProfesionalResponse anterior = obtener(id);
         perfil.setActivo(false);
         perfiles.saveAndFlush(perfil);
+        auditoria.registrar(TABLA, id, AccionAuditoria.DESACTIVAR, anterior, obtener(id));
     }
 
     @Transactional
     public ProfesionalResponse reemplazarRolesClinicos(UUID id, List<UUID> ids) {
         buscar(id);
+        ProfesionalResponse anterior = obtener(id);
         reemplazar(id, ids, "roles_clinicos", "profesional_roles_clinicos", "rol_clinico_id", "Roles clínicos");
-        return obtener(id);
+        ProfesionalResponse actualizado = obtener(id);
+        auditoria.registrar("profesional_roles_clinicos", id, AccionAuditoria.REEMPLAZAR, anterior, actualizado);
+        return actualizado;
     }
 
     /** Si una solicitud referencia la especialidad (fk_solicitud_medico_especialidad), la base responde 422. */
     @Transactional
     public ProfesionalResponse reemplazarEspecialidades(UUID id, List<UUID> ids) {
         buscar(id);
+        ProfesionalResponse anterior = obtener(id);
         reemplazar(id, ids, "especialidades", "profesional_especialidades", "especialidad_id", "Especialidades");
-        return obtener(id);
+        ProfesionalResponse actualizado = obtener(id);
+        auditoria.registrar("profesional_especialidades", id, AccionAuditoria.REEMPLAZAR, anterior, actualizado);
+        return actualizado;
     }
 
     PerfilProfesional buscar(UUID id) {

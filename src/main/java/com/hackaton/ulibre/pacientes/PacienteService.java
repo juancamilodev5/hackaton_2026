@@ -6,6 +6,8 @@ import java.time.Period;
 import java.util.Locale;
 import java.util.UUID;
 
+import com.hackaton.ulibre.auditoria.AccionAuditoria;
+import com.hackaton.ulibre.auditoria.Auditoria;
 import com.hackaton.ulibre.comun.Pagina;
 import com.hackaton.ulibre.comun.Paginacion;
 import com.hackaton.ulibre.comun.RecursoNoEncontradoException;
@@ -18,20 +20,25 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/** Pacientes. Cada alta, edición o borrado queda en registros_auditoria. */
 @Service
 public class PacienteService {
+
+    private static final String TABLA = "pacientes";
 
     private final PacienteRepository pacientes;
     private final AlergiaPacienteRepository alergias;
     private final JdbcClient jdbc;
     private final Clock clock;
+    private final Auditoria auditoria;
 
     public PacienteService(PacienteRepository pacientes, AlergiaPacienteRepository alergias, JdbcClient jdbc,
-            Clock clock) {
+            Clock clock, Auditoria auditoria) {
         this.pacientes = pacientes;
         this.alergias = alergias;
         this.jdbc = jdbc;
         this.clock = clock;
+        this.auditoria = auditoria;
     }
 
     /** q busca en nombres, apellidos, nombre completo y número de documento, sin distinguir mayúsculas. */
@@ -55,14 +62,19 @@ public class PacienteService {
     public PacienteResponse crear(PacienteRequest datos) {
         Paciente paciente = new Paciente();
         aplicar(paciente, datos);
-        return respuesta(pacientes.saveAndFlush(paciente));
+        PacienteResponse creado = respuesta(pacientes.saveAndFlush(paciente));
+        auditoria.registrar(TABLA, creado.id(), AccionAuditoria.CREAR, null, creado);
+        return creado;
     }
 
     @Transactional
     public PacienteResponse actualizar(UUID id, PacienteRequest datos) {
         Paciente paciente = buscar(id);
+        PacienteResponse anterior = respuesta(paciente);
         aplicar(paciente, datos);
-        return respuesta(pacientes.saveAndFlush(paciente));
+        PacienteResponse actualizado = respuesta(pacientes.saveAndFlush(paciente));
+        auditoria.registrar(TABLA, id, AccionAuditoria.ACTUALIZAR, anterior, actualizado);
+        return actualizado;
     }
 
     /**
@@ -82,9 +94,11 @@ public class PacienteService {
         if (tieneHistorico) {
             throw new ReglaNegocioException("El paciente tiene histórico clínico (citas o solicitudes); no se borra");
         }
+        PacienteResponse anterior = respuesta(paciente);
         alergias.deleteAllByPacienteId(id);
         pacientes.delete(paciente);
         pacientes.flush();
+        auditoria.registrar(TABLA, id, AccionAuditoria.ELIMINAR, anterior, null);
     }
 
     @Transactional(readOnly = true)
